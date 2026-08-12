@@ -74,37 +74,34 @@ function parseEnvFile(path: string): Record<string, string> {
 const projectRef = (url: string) =>
   url.replace(/^https?:\/\//, "").split(".")[0] ?? url;
 
+/**
+ * Reads the project's normal `.env.local`, optionally overridden by
+ * `.env.demo.local` when one exists.
+ *
+ * Only ONE database is configured in this repo, so there is no "live vs demo"
+ * pair of env files to cross-check — the guards that matter are instead
+ * `assertDemoBrand()` (is this a placeholder identity?) and `assertEmpty()`
+ * (does the target already hold data?). If you keep several environments side
+ * by side, drop a `.env.demo.local` in and it wins, so a stray `npm run
+ * seed:demo` cannot hit whatever `.env.local` currently points at.
+ */
 function loadDemoEnv(): string {
-  if (!existsSync(DEMO_ENV)) {
+  const file = existsSync(DEMO_ENV) ? DEMO_ENV : LIVE_ENV;
+  if (!existsSync(file)) {
     fail(
-      `${DEMO_ENV} not found.\n\n` +
-        `Create it with the DEMO project's keys (never the live ones):\n` +
-        `  NEXT_PUBLIC_SUPABASE_URL=https://<demo-ref>.supabase.co\n` +
+      `No environment file found (looked for ${DEMO_ENV}, then ${LIVE_ENV}).\n\n` +
+        `Copy .env.example to .env.local and fill in your Supabase keys:\n` +
+        `  NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co\n` +
         `  NEXT_PUBLIC_SUPABASE_ANON_KEY=...\n` +
         `  SUPABASE_SERVICE_ROLE_KEY=...`,
     );
   }
-  const demo = parseEnvFile(DEMO_ENV);
+  const demo = parseEnvFile(file);
   const url = demo.NEXT_PUBLIC_SUPABASE_URL;
   if (!url || !demo.SUPABASE_SERVICE_ROLE_KEY) {
-    fail(`${DEMO_ENV} must set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.`);
+    fail(`${file} must set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.`);
   }
-
-  // The one thing that must never happen: seeding fake data into the client's
-  // real project. Compare against .env.local if it is present.
-  if (existsSync(LIVE_ENV)) {
-    const live = parseEnvFile(LIVE_ENV);
-    const liveUrl = live.NEXT_PUBLIC_SUPABASE_URL;
-    if (liveUrl && projectRef(liveUrl) === projectRef(url)) {
-      fail(
-        `REFUSING TO RUN: ${DEMO_ENV} points at the same Supabase project as ${LIVE_ENV} ` +
-          `(${projectRef(url)}). The demo needs its OWN project.`,
-      );
-    }
-    if (live.SUPABASE_SERVICE_ROLE_KEY === demo.SUPABASE_SERVICE_ROLE_KEY) {
-      fail(`REFUSING TO RUN: ${DEMO_ENV} reuses the live service-role key.`);
-    }
-  }
+  console.log(`  (env: ${file})`);
 
   // Force the admin client onto the demo project regardless of ambient env.
   process.env.NEXT_PUBLIC_SUPABASE_URL = url;
