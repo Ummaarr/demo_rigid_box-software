@@ -293,7 +293,7 @@ export function RateSection({
 
   async function deleteRow(rowId: unknown, row: Record<string, unknown>) {
     const ok = await confirm({
-      title: "Delete this rate?",
+      title: "Delete rate?",
       subject: rowLabelFor(row),
       body: "Saved estimates keep their own rate snapshots and are unaffected.",
     });

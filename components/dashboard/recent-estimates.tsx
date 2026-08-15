@@ -125,7 +125,7 @@ export function RecentEstimatesTable({
   async function deleteEstimate(e: RecentEstimate) {
     const label = `${boxLabel(e.boxType)} × ${e.quantity.toLocaleString("en-IN")}`;
     const ok = await confirm({
-      title: "Delete this estimate?",
+      title: "Delete estimate?",
       subject: label,
       body: "Quotes already sent keep their own copy and stay intact.",
     });

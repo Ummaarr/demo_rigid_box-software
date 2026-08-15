@@ -126,7 +126,6 @@ export function StaffDirectory({
       title: "Delete this login?",
       subject: label,
       body: "They will no longer be able to sign in. Their saved estimates stay.",
-      confirmLabel: "Delete login",
     });
     if (!ok) return;
     setBusy(true);

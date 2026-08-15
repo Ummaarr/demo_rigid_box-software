@@ -93,7 +93,7 @@ export function ClientList({
 
   async function deleteClient(id: string, name: string) {
     const ok = await confirm({
-      title: "Delete this client?",
+      title: "Delete client?",
       subject: name,
       body: "This cannot be undone. Estimates already saved for them are kept.",
     });

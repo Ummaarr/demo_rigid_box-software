@@ -3349,7 +3349,7 @@ export function EstimateForm({
               <InlineNotice kind="success" autoDismissMs={0} icon={false} messageKey={savedId}>
                 {savedId ? (
                   <>
-                    Saved as <span className="font-mono">{savedId.slice(0, 8)}</span>
+                    Saved
                     {" · "}
                     <Link
                       href={`/estimates/${savedId}`}

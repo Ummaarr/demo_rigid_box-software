@@ -26,20 +26,23 @@
 
 import { useCallback, useRef, useState } from "react";
 import { AlertDialog } from "@base-ui/react/alert-dialog";
-import { TriangleAlert, type LucideIcon } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
 export interface ConfirmOptions {
-  /** The question, as a question — "Delete estimate?" */
+  /** The question, asked as one — "Delete estimate?". Answered by the buttons. */
   title: string;
-  /** What is being acted on; rendered prominently under the title. */
+  /**
+   * WHICH record — the estimate's name, the client, the rate row. Quoted and
+   * emphasised inside the sentence, so the one thing that can prevent a
+   * mistake is named without breaking the dialog's conversational tone.
+   */
   subject?: string;
   /** Consequences. Keep it to the part the user can't already see. */
   body?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  icon?: LucideIcon;
 }
 
 function ConfirmDialog({
@@ -51,10 +54,11 @@ function ConfirmDialog({
   options: ConfirmOptions | null;
   onResolve: (confirmed: boolean) => void;
 }) {
-  // Focus starts on Cancel: a destructive action should never be one stray
-  // Enter away, and Base UI would otherwise focus the first tabbable element.
+  // Focus starts on the decline button: a destructive action should never be
+  // one stray Enter away, and Base UI would otherwise focus the first tabbable
+  // element — which here is the same button, but say it explicitly so a later
+  // reorder of the footer can't silently arm the delete.
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const Icon = options?.icon ?? TriangleAlert;
 
   return (
     <AlertDialog.Root
@@ -66,47 +70,70 @@ function ConfirmDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Backdrop className="t-modal-backdrop fixed inset-0 z-50 bg-foreground/15 supports-backdrop-filter:backdrop-blur-[2px]" />
-        <AlertDialog.Popup
-          initialFocus={cancelRef}
-          className="t-modal fixed inset-0 z-50 m-auto h-fit w-[calc(100%-2rem)] max-w-[25rem] rounded-xl border bg-popover p-4 text-popover-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-6px_rgba(0,0,0,0.10),0_24px_48px_-16px_rgba(0,0,0,0.16)] outline-none"
-        >
-          <div className="flex gap-3">
-            {/* Concentric: rounded-lg badge inside the rounded-xl popup. */}
+        {/* Centred optically, not geometrically: the extra bottom padding lifts
+            the dialog ~6vh above true centre, which is where the eye expects it.
+            A dialog on the exact midline always reads as sitting low.
+            pointer-events-none keeps this wrapper from swallowing backdrop
+            events; the popup itself takes them back. */}
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4 pb-[12vh]">
+          <AlertDialog.Popup
+            initialFocus={cancelRef}
+            className="t-modal pointer-events-auto w-full max-w-[24.5rem] rounded-2xl border bg-popover p-6 text-center text-popover-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-6px_rgba(0,0,0,0.10),0_24px_48px_-16px_rgba(0,0,0,0.16)] outline-none"
+          >
             <span
               aria-hidden="true"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive"
+              className="mx-auto flex size-12 items-center justify-center rounded-full bg-danger/10 text-danger"
             >
-              <Icon className="size-4" />
+              <TriangleAlert className="size-5" />
             </span>
-            <div className="min-w-0 flex-1 pt-0.5">
-              <AlertDialog.Title className="font-heading text-sm font-medium text-balance">
-                {options?.title}
-              </AlertDialog.Title>
-              {options?.subject && (
-                <p className="mt-0.5 truncate text-sm text-foreground/80">{options.subject}</p>
-              )}
-              {options?.body && (
-                <AlertDialog.Description className="mt-1.5 text-xs text-pretty text-muted-foreground">
-                  {options.body}
-                </AlertDialog.Description>
-              )}
-            </div>
-          </div>
 
-          <div className="mt-4 flex justify-end gap-2">
-            <Button
-              ref={cancelRef}
-              size="lg"
-              variant="outline"
-              onClick={() => onResolve(false)}
-            >
-              {options?.cancelLabel ?? "Cancel"}
-            </Button>
-            <Button size="lg" variant="destructive" onClick={() => onResolve(true)}>
-              {options?.confirmLabel ?? "Delete"}
-            </Button>
-          </div>
-        </AlertDialog.Popup>
+            <AlertDialog.Title className="mt-4 text-lg leading-snug font-semibold tracking-[-0.015em] text-balance text-primary">
+              {options?.title}
+            </AlertDialog.Title>
+
+            {/* No max-width clamp: at this dialog size a ch-based clamp forces
+                the quoted record name to break mid-way ("Telescopic × / 500"),
+                which is the one string here that must stay readable. */}
+            <AlertDialog.Description className="mt-2 text-[0.8125rem] leading-relaxed text-pretty text-muted-foreground">
+              {/* Naming the record inside the sentence keeps the one detail that
+                  prevents a mistake without breaking the conversational tone —
+                  the emphasis does the work a separate headline used to. */}
+              {options?.subject && (
+                <>
+                  You&rsquo;re about to delete{" "}
+                  <span className="font-medium text-foreground">
+                    &ldquo;{options.subject}&rdquo;
+                  </span>
+                  .{" "}
+                </>
+              )}
+              {options?.body}
+            </AlertDialog.Description>
+
+            {/* Both buttons answer the title as a question, so neither can be
+                hit without reading it — "Cancel / Delete" makes you work out
+                which one is which. Equal width, because the choice is equal;
+                only the colour says which way is destructive. */}
+            <div className="mt-6 flex gap-2.5">
+              <Button
+                ref={cancelRef}
+                size="lg"
+                variant="secondary"
+                className="h-10 flex-1 rounded-xl"
+                onClick={() => onResolve(false)}
+              >
+                {options?.cancelLabel ?? "No, keep it"}
+              </Button>
+              <Button
+                size="lg"
+                className="h-10 flex-1 rounded-xl bg-danger-solid text-danger-foreground hover:bg-danger-solid/90 focus-visible:border-danger-solid/40 focus-visible:ring-danger-solid/20"
+                onClick={() => onResolve(true)}
+              >
+                {options?.confirmLabel ?? "Yes, delete"}
+              </Button>
+            </div>
+          </AlertDialog.Popup>
+        </div>
       </AlertDialog.Portal>
     </AlertDialog.Root>
   );

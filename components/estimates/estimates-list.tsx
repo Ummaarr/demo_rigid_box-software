@@ -153,7 +153,7 @@ export function EstimatesList({
   async function deleteEstimate(e: EstimateListItem) {
     const label = e.name || `${boxLabel(e.box_type)} × ${e.quantity.toLocaleString()}`;
     const ok = await confirm({
-      title: "Delete this estimate?",
+      title: "Delete estimate?",
       subject: label,
       body: "Quotes already sent keep their own copy and stay intact.",
     });
