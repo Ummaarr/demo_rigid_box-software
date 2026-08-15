@@ -141,6 +141,21 @@
   --check-ease-rotate: cubic-bezier(0.22, 1, 0.36, 1);
   --check-ease-bob: cubic-bezier(0.34, 1.35, 0.64, 1);
   --check-ease-path: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Modal open / close (transitions-dev) — the confirm dialog that replaced
+     window.confirm(). Skill defaults, untouched. */
+  --modal-open-dur: 250ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.96;
+  --modal-scale-close: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Text states swap (transitions-dev) — a control whose label changes in
+     place ("Save estimate" -> "Saving…" -> "Saved"). */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
 }
 
 .dark {
@@ -287,6 +302,101 @@
 
 @media (prefers-reduced-motion: reduce) {
   .t-resize {
+    transition: none !important;
+  }
+}
+
+/* Modal open / close (transitions-dev) — the confirm dialog.
+   The skill's snippet keys off .is-open / .is-closing and a setTimeout to
+   strip the closing class. Base UI drives the SAME three states declaratively
+   and keeps the popup mounted until the transition ends, so the class hooks
+   are its data attributes instead: [data-starting-style] = the pre-open frame,
+   no attribute = resting/open, [data-ending-style] = closing. No JS cleanup to
+   forget, and the next open can't inherit the closing scale. */
+.t-modal {
+  transform-origin: center;
+  transform: scale(1);
+  opacity: 1;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.t-modal[data-starting-style] {
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+}
+.t-modal[data-ending-style] {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+/* Backdrop fades only — scaling it too reads as the page itself moving. */
+.t-modal-backdrop {
+  opacity: 1;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.t-modal-backdrop[data-starting-style],
+.t-modal-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.t-modal-backdrop[data-ending-style] {
+  transition-duration: var(--modal-close-dur);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-modal,
+  .t-modal-backdrop {
+    transition: none !important;
+  }
+}
+
+/* Text states swap (transitions-dev) — old label exits up with blur, new one
+   enters from below.
+   The skill's snippet mutates textContent through a three-phase JS sequence
+   (exit -> swap text -> reflow -> enter). React owns this DOM, so the states
+   are STACKED in one grid cell instead and only [data-pos] moves: pure CSS
+   transitions, which means a swap interrupted mid-flight (save clicked again
+   while "Saved" is still settling) reverses from where it is rather than
+   snapping. Direction is preserved by ordering the states — anything before
+   the active one sits above, anything after sits below. */
+.t-text-swap {
+  display: inline-grid;
+  place-items: center;
+}
+.t-text-swap > * {
+  grid-area: 1 / 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter var(--text-swap-dur) var(--text-swap-ease),
+    opacity var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap > [data-pos="active"] {
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+}
+.t-text-swap > [data-pos="above"],
+.t-text-swap > [data-pos="below"] {
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  /* Inactive labels are still laid out (they hold the cell's width) but must
+     never take a click or a screen reader's attention. */
+  pointer-events: none;
+}
+.t-text-swap > [data-pos="above"] {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+}
+.t-text-swap > [data-pos="below"] {
+  transform: translateY(var(--text-swap-translate-y));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap > * {
     transition: none !important;
   }
 }

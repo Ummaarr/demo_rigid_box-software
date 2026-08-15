@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -63,6 +64,7 @@ export function StaffDirectory({
   currentUserId: string;
 }) {
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<EditState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -120,13 +122,13 @@ export function StaffDirectory({
 
   async function deleteUser(u: StaffUser) {
     const label = u.fullName ?? u.email ?? "this user";
-    // eslint-disable-next-line no-alert
-    if (
-      !window.confirm(
-        `Delete ${label}'s login? They will no longer be able to sign in. Their saved estimates stay.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: "Delete this login?",
+      subject: label,
+      body: "They will no longer be able to sign in. Their saved estimates stay.",
+      confirmLabel: "Delete login",
+    });
+    if (!ok) return;
     setBusy(true);
     setListError(null);
     try {
@@ -145,6 +147,7 @@ export function StaffDirectory({
 
   return (
     <div className="flex flex-col gap-4">
+      {confirmDialog}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input

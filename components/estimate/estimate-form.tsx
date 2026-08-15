@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { HardHat, Layers, Package, PackageOpen, Plus, ReceiptText, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { Switch } from "@/components/ui/switch";
 import { FormSection, type SectionDef } from "@/components/estimate/form-section";
+import { SaveButton } from "@/components/estimate/save-button";
 import { keylineComponents, ReverseBoardKeyline } from "@/components/keylines";
 import { ResultPanel, type AutoPickInfo, type ResultCost } from "@/components/estimate/result-panel";
 import type { AdjustableLine, CostAdjustment } from "@/lib/engines/cost";
@@ -81,6 +83,8 @@ const BOARD_THICKNESSES = [1.2, 1.5, 1.8, 2, 2.5, 3];
 const AUTO_SIZE = "__auto";
 const MAGNET_BOXES = new Set<BoxType>(["magnetic", "double_decker", "collapsible_rigid"]);
 const RIBBON_BOXES = new Set<BoxType>(["drawer_sliding", "double_decker"]);
+/** How long the Save button holds its "Saved" state before reverting to idle. */
+const SAVED_HOLD_MS = 2200;
 
 // Beading is entered at a finer grain than the shared dimStep allows: BH/BT
 // default to 0.5 in / 0.125 in, and dimStep's 0.1 for in/cm would coarsen the
@@ -440,12 +444,20 @@ export function EstimateForm({
   initialSpecs,
   sourceEstimateId,
   clients = [],
+  initialOptions = null,
 }: {
   role: UserRole | null;
   initialSpecs?: EstimateRequest;
   /** Present when pre-filled via /estimate?from=<id> — saving marks that estimate 'revised'. */
   sourceEstimateId?: string;
   clients?: ClientRow[];
+  /**
+   * Rate options rendered in by the server (app/(app)/estimate/page.tsx). When
+   * present the form skips its own /api/rates/options round trip, which used to
+   * run only after hydration and left every dropdown empty until it landed.
+   * Null (the load failed) falls back to fetching.
+   */
+  initialOptions?: RateOptions | null;
 }) {
   // Core
   const [clientId, setClientId] = useState("");
@@ -500,7 +512,9 @@ export function EstimateForm({
   }, [vars, boxType, boardThickness]);
 
   // Options
-  const [options, setOptions] = useState<RateOptions | null>(null);
+  // Seeded from the server render when available, so the dropdowns are
+  // populated on the FIRST paint instead of after a post-hydration fetch.
+  const [options, setOptions] = useState<RateOptions | null>(initialOptions);
 
   // Wrapping + finishing
   const [outerMode, setOuterMode] = useState<OuterMode>("none");
@@ -693,6 +707,16 @@ export function EstimateForm({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
+  // The button's success state is momentary — it celebrates, then hands the
+  // button back so a second save isn't blocked by a stale "Saved". The lasting
+  // record (id + link) stays in the notice underneath.
+  const [justSaved, setJustSaved] = useState(false);
+  useEffect(() => {
+    if (!justSaved) return;
+    const t = setTimeout(() => setJustSaved(false), SAVED_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [justSaved]);
+  const saveState = saving ? "saving" : justSaved ? "saved" : "idle";
   // Shake the job card when calculate / save reports an error.
   const { ref: jobCardRef, shake: shakeJobCard } = useShake<HTMLDivElement>();
   useEffect(() => {
@@ -950,10 +974,16 @@ export function EstimateForm({
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/rates/options");
-        if (!res.ok) return;
-        const o = (await res.json()) as RateOptions;
-        setOptions(o);
+        // Server-rendered when the page could load it; only fall back to the
+        // network when it could not. Either way the default-seeding below is
+        // unchanged — it is the same `o`, from the same loader.
+        let o = initialOptions;
+        if (!o) {
+          const res = await fetch("/api/rates/options");
+          if (!res.ok) return;
+          o = (await res.json()) as RateOptions;
+          setOptions(o);
+        }
         // Skip defaults when pre-populated from a saved estimate — those values are already set.
         if (!initialSpecs) {
           if (o.paper[0]) {
@@ -1430,13 +1460,17 @@ export function EstimateForm({
   async function calculate() {
     setLoading(true);
     setSavedId(null);
+    setJustSaved(false);
     await submit("/api/estimate/calculate", (d) => setResult(d as Result));
     setLoading(false);
   }
   async function save() {
     setSaving(true);
+    // Only set on the success path — submit() runs this callback exclusively
+    // when the POST came back OK, so a failed save never shows the tick.
     await submit("/api/estimate", (d) => {
       setSavedId(d.id as string);
+      setJustSaved(true);
       setResult({
         materials: d.materials as MaterialQuantities,
         cost: d.cost as ResultCost,
@@ -3302,14 +3336,27 @@ export function EstimateForm({
                 <Button size="lg" className="flex-1" onClick={calculate} disabled={loading || !dimsValid}>
                   {loading ? "Calculating…" : "Calculate"}
                 </Button>
-                <Button size="lg" className="flex-1" variant="outline" onClick={save} disabled={saving || !dimsValid}>
-                  {saving ? "Saving…" : "Save estimate"}
-                </Button>
+                <SaveButton
+                  className="flex-1"
+                  state={saveState}
+                  savedId={savedId}
+                  onClick={() => void save()}
+                  disabled={saving || !dimsValid}
+                />
               </div>
-              <InlineNotice kind="success" autoDismissMs={0}>
+              {/* icon={false}: the button already drew the tick, and two of them
+                  a few pixels apart reads as a glitch rather than emphasis. */}
+              <InlineNotice kind="success" autoDismissMs={0} icon={false} messageKey={savedId}>
                 {savedId ? (
                   <>
-                    Saved <span className="font-mono">{savedId.slice(0, 8)}</span>
+                    Saved as <span className="font-mono">{savedId.slice(0, 8)}</span>
+                    {" · "}
+                    <Link
+                      href={`/estimates/${savedId}`}
+                      className="font-medium underline underline-offset-2 hover:no-underline"
+                    >
+                      Open estimate
+                    </Link>
                   </>
                 ) : null}
               </InlineNotice>

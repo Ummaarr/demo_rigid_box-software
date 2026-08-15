@@ -66,13 +66,19 @@ async function attachAddonImages(admin: SupabaseClient, data: MaterialsData): Pr
   await Promise.all(jobs);
 }
 
+// The logo is a build asset — read and base64-encode it ONCE per process
+// instead of on every PDF request.
+let logoCache: string | undefined | null = null;
+
 async function loadLogo(): Promise<string | undefined> {
+  if (logoCache !== null) return logoCache;
   try {
     const buf = await readFile(join(process.cwd(), "public", "brand", "logo.png"));
-    return `data:image/png;base64,${buf.toString("base64")}`;
+    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
   } catch {
-    return undefined; // component falls back to the company name as text
+    logoCache = undefined; // component falls back to the company name as text
   }
+  return logoCache;
 }
 
 function materialsFilename(name: string, id: string): string {
@@ -115,8 +121,9 @@ export async function GET(
     const data = buildMaterialsData(est, materials);
     // Resolve add-on photos (handles/locks/misc) — the pure builder only names
     // them; storage access lives here.
-    await attachAddonImages(admin, data);
-    const logo = await loadLogo();
+    // Independent of each other — the photos come from storage, the logo from
+    // disk. Running them in sequence cost ~65 ms per PDF for no reason.
+    const [, logo] = await Promise.all([attachAddonImages(admin, data), loadLogo()]);
     const pdf = await renderToBuffer(
       createElement(MaterialsDocument, { data, logo }) as unknown as Parameters<
         typeof renderToBuffer

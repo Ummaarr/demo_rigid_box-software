@@ -7,6 +7,8 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { invalidateRateCache } from "@/lib/db/rate-cache";
+
 // All fields that accept free text (not numbers / booleans).
 export const TEXT_FIELDS = new Set([
   "vendor", "name", "type", "color", "colour", "finish", "size_label", "unit",
@@ -164,5 +166,8 @@ export async function applyRateUpdate(
     console.error(`rate update (${table}.${field}):`, error);
     return { error: "Failed to update rate." };
   }
+  // Drop the in-process rate cache so the next estimate prices off this edit
+  // (covers both a direct admin PATCH and an approved staff proposal).
+  invalidateRateCache();
   return { updated_at: updatedAt, updated_by: updatedBy ?? null };
 }

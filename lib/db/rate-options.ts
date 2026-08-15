@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { DEFAULT_BOARD_TYPE } from "@/types";
+import { cachedDerived } from "@/lib/db/rate-cache";
 
 // The distinct rate "options" the estimate form needs to populate its dropdowns
 // (which paper sizes/GSMs, printing sizes, finishing types, foam/magnet/labour
@@ -66,7 +67,19 @@ export interface RateOptions {
   misc: { id: number; name: string; unit: string; price: number }[];
 }
 
+/**
+ * Cached wrapper. These 23 reads run on every estimate-form load and the answer
+ * only changes when someone edits the rate card — which invalidates the cache.
+ * The whole computation is memoised (rather than the individual queries) so the
+ * pre-migration probes below keep depending on real PostgREST errors.
+ */
 export async function loadRateOptions(
+  supabase: SupabaseClient,
+): Promise<RateOptions> {
+  return cachedDerived("rate-options", () => computeRateOptions(supabase));
+}
+
+async function computeRateOptions(
   supabase: SupabaseClient,
 ): Promise<RateOptions> {
   const [

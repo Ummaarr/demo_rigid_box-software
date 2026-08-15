@@ -11,8 +11,72 @@ import { NextResponse, type NextRequest } from "next/server";
  * on every request and must stay fast. Role enforcement lives in the server
  * DAL (lib/auth.ts) and Route Handlers, close to the data.
  */
+
+/**
+ * The project's JWT signing keys, cached for the whole server process.
+ *
+ * WHY: this proxy verifies the session on EVERY request, and `getUser()` did it
+ * by asking the auth server — a ~70 ms round trip (measured; see the rate-cache
+ * section in CLAUDE.md for why round trips cost that much here) paid before any
+ * page or API route even starts. `getClaims()` instead verifies the token's
+ * signature locally against the public key, with no network call at all.
+ *
+ * The catch: auth-js caches the key set on the CLIENT INSTANCE, and this proxy
+ * builds a fresh client per request, so it would re-fetch the JWKS every time
+ * and save nothing. Holding the keys at module scope and passing them in via
+ * `options.jwks` is what makes the verification genuinely local.
+ *
+ * Key rotation is safe: if a token is signed with a `kid` that is not in this
+ * set, auth-js falls through to fetching the current JWKS itself.
+ *
+ * Projects still on a SYMMETRIC (HS256) signing secret cannot be verified
+ * locally at all — auth-js detects that and transparently falls back to the
+ * same server call `getUser()` made, so this is never wrong, only sometimes
+ * not faster.
+ */
+const JWKS_TTL_MS = 10 * 60 * 1000;
+let jwksCache: { keys: unknown[] } | null = null;
+let jwksCachedAt = 0;
+
+async function signingKeys(): Promise<{ keys: never[] } | undefined> {
+  if (jwksCache && Date.now() - jwksCachedAt < JWKS_TTL_MS) {
+    return jwksCache as { keys: never[] };
+  }
+  try {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/.well-known/jwks.json`,
+      { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! } },
+    );
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { keys?: unknown[] };
+    if (!data.keys?.length) return undefined;
+    jwksCache = { keys: data.keys };
+    jwksCachedAt = Date.now();
+    return jwksCache as { keys: never[] };
+  } catch {
+    // Never let a key-fetch problem break auth — getClaims falls back on its own.
+    return undefined;
+  }
+}
+
 export async function proxy(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+
+  // API routes authenticate themselves (getSession in lib/auth.ts) and answer
+  // with 401 JSON rather than an HTML redirect, so there is nothing for this
+  // proxy to decide for them. Returning BEFORE the auth check — it used to run
+  // after — drops a duplicated session verification from every API call. Their
+  // own Supabase client still refreshes the cookie when the token has expired,
+  // because a Route Handler is allowed to write cookies on its response.
+  if (path.startsWith("/api")) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
+
+  // Fetched before the client is created so no await sits between
+  // createServerClient and the session check below.
+  const jwks = await signingKeys();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,19 +99,15 @@ export async function proxy(request: NextRequest) {
     },
   );
 
-  // Refreshes the session if expired. Do not run code between createServerClient
-  // and getUser() — it can cause hard-to-debug session sync issues.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const path = request.nextUrl.pathname;
-
-  // API routes enforce their own auth (and return proper 401/403 JSON), so we
-  // only refresh their session cookie here and never redirect them to HTML.
-  if (path.startsWith("/api")) {
-    return supabaseResponse;
-  }
+  // Refreshes the session if expired — getClaims() reads it through getSession(),
+  // which renews an expired access token and writes the new cookies via setAll
+  // above, exactly as getUser() did. Do not run code between createServerClient
+  // and this call — it can cause hard-to-debug session sync issues.
+  const { data: claims } = await supabase.auth.getClaims(
+    undefined,
+    jwks ? { jwks } : undefined,
+  );
+  const user = claims?.claims ?? null;
 
   const isPublic = path === "/login";
 

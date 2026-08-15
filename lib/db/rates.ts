@@ -16,6 +16,7 @@ import type {
 } from "@/types";
 import { DEFAULT_BOARD_TYPE } from "@/types";
 import { EstimateError } from "@/lib/estimate/errors";
+import { byVendorNullsFirst, hasColumn, matchRows, rateTable } from "@/lib/db/rate-cache";
 
 // Auto-trigger sets (mirror Engine 1 / CLAUDE.md) so we only require the rate
 // rows a given box type actually needs.
@@ -145,22 +146,37 @@ export interface ResolvedRates {
 
 // --- low-level helpers ----------------------------------------------------
 
-/** Fetch a single matching row (or null) from a rate table. */
+/**
+ * Fetch a single matching row (or null) from a rate table.
+ *
+ * Served from the in-process rate cache (lib/db/rate-cache.ts) rather than a
+ * per-lookup query: resolving one estimate runs 15-40 of these back to back, and
+ * at ~70 ms per round trip that was the bulk of the 4-5 s "Calculate" wait. The
+ * whole rate card is a few KB, so it is pulled once and filtered here.
+ *
+ * `cols` is no longer sent to PostgREST (the cache holds whole rows) but is kept
+ * on the signature: at 50-odd call sites it documents what each lookup reads,
+ * and dropping it would churn every one of them for no gain.
+ */
 async function row<T>(
   supabase: SupabaseClient,
   table: string,
   cols: string,
   filters: Record<string, string | number>,
 ): Promise<T | null> {
-  const { data, error } = await supabase
-    .from(table)
-    .select(cols)
-    .match(filters)
-    .maybeSingle();
-  if (error) {
-    throw new Error(`rate lookup failed for ${table}: ${error.message}`);
+  const snapshot = await rateTable(supabase, table);
+  if (snapshot.error) {
+    throw new Error(`rate lookup failed for ${table}: ${snapshot.error.message}`);
   }
-  return (data as T | null) ?? null;
+  const matches = matchRows(snapshot.rows, table, filters);
+  // .maybeSingle() errors when more than one row comes back; a rate table with
+  // duplicate keys is a data fault we must keep surfacing, not silently pick from.
+  if (matches.length > 1) {
+    throw new Error(
+      `rate lookup failed for ${table}: ${matches.length} rows matched a lookup that must return one`,
+    );
+  }
+  return (matches[0] as T | undefined) ?? null;
 }
 
 type CoverPaperRow = { cost_per_sheet: number; width_in: number; height_in: number };
@@ -191,15 +207,19 @@ async function printRow<T>(
   filters: Record<string, string | number>,
   vendor?: string,
 ): Promise<T | null> {
-  let q = supabase.from(table).select(cols).match(filters);
-  q = vendor
-    ? q.eq("vendor", vendor)
-    : q.order("vendor", { ascending: true, nullsFirst: true });
-  const { data, error } = await q.limit(1).maybeSingle();
-  if (error) {
-    throw new Error(`rate lookup failed for ${table}: ${error.message}`);
+  const snapshot = await rateTable(supabase, table);
+  if (snapshot.error) {
+    throw new Error(`rate lookup failed for ${table}: ${snapshot.error.message}`);
   }
-  return (data as T | null) ?? null;
+  let matches = matchRows(snapshot.rows, table, filters);
+  if (vendor) {
+    // .eq("vendor", v) — a NULL vendor never equals a named one.
+    matches = matches.filter((r) => r.vendor != null && String(r.vendor) === vendor);
+  } else if (hasColumn(snapshot.rows, "vendor")) {
+    matches = [...matches].sort(byVendorNullsFirst);
+  }
+  // `.limit(1)`, so multiple matches were never an error here — the first wins.
+  return (matches[0] as T | undefined) ?? null;
 }
 
 /** " from \"Vendor\"" for error messages — empty when no vendor was chosen, so
@@ -545,24 +565,17 @@ async function resolveFinishing(
       // colour (glossy first) so legacy snapshots — and DBs that haven't run
       // migration-round3.sql (single row per colour, no finish column) —
       // resolve exactly as before.
-      let foils: { rate_per_sqin: number; finish?: string | null }[];
-      const foilRes = await supabase
-        .from("foiling_rates")
-        .select("rate_per_sqin, finish")
-        .eq("color", f.key);
-      if (foilRes.error) {
-        // 42703 = undefined column: DB predates migration-round3.sql (no finish yet).
-        if (foilRes.error.code !== "42703")
-          throw new Error(`rate lookup failed for foiling_rates: ${foilRes.error.message}`);
-        const legacy = await supabase
-          .from("foiling_rates")
-          .select("rate_per_sqin")
-          .eq("color", f.key);
-        if (legacy.error) throw new Error(`rate lookup failed for foiling_rates: ${legacy.error.message}`);
-        foils = (legacy.data ?? []) as { rate_per_sqin: number }[];
-      } else {
-        foils = (foilRes.data ?? []) as { rate_per_sqin: number; finish?: string | null }[];
-      }
+      // Cached table, filtered in memory (see rate-cache.ts). A DB predating
+      // migration-round3.sql simply has no `finish` on its rows, so `finish`
+      // reads as undefined and the null-tolerant fallback below picks the single
+      // row per colour exactly as the old legacy branch did.
+      const foilSnapshot = await rateTable(supabase, "foiling_rates");
+      if (foilSnapshot.error)
+        throw new Error(`rate lookup failed for foiling_rates: ${foilSnapshot.error.message}`);
+      const foils = matchRows(foilSnapshot.rows, "foiling_rates", { color: f.key }) as unknown as {
+        rate_per_sqin: number;
+        finish?: string | null;
+      }[];
       const r = need(
         foils.find((x) => f.finish && x.finish === f.finish) ??
           foils.find((x) => x.finish === "glossy" || x.finish == null) ??

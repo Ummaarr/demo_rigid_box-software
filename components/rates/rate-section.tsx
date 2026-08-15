@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { InlineNotice } from "@/components/ui/inline-notice";
 
 // Types mirrored from lib/db/rate-admin (no server-only import needed here).
@@ -178,6 +179,7 @@ export function RateSection({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const { confirm, confirmDialog } = useConfirm();
   // Shake the cell being edited when the typed value is rejected (empty /
   // negative / NaN) instead of silently reverting.
   const { ref: editRef, shake: shakeEdit } = useShake<HTMLInputElement>();
@@ -290,8 +292,12 @@ export function RateSection({
   }
 
   async function deleteRow(rowId: unknown, row: Record<string, unknown>) {
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete "${rowLabelFor(row)}"? Saved estimates keep their own rate snapshots and are unaffected.`)) return;
+    const ok = await confirm({
+      title: "Delete this rate?",
+      subject: rowLabelFor(row),
+      body: "Saved estimates keep their own rate snapshots and are unaffected.",
+    });
+    if (!ok) return;
     setSaving(true);
     setErr(null);
     try {
@@ -417,6 +423,7 @@ export function RateSection({
 
   return (
     <Card>
+      {confirmDialog}
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-baseline gap-2">
