@@ -18,11 +18,16 @@ import {
 } from "@react-pdf/renderer";
 import type { QuotationData } from "@/lib/pdf/quotation-data";
 import { BRAND } from "@/lib/brand";
+import { CURRENCY_META } from "@/lib/currency-meta";
+import type { CurrencyCode } from "@/types";
 
-const NAVY = "#1F2A5C";
-const GOLD = "#C6A24C";
+// Warm espresso + clay, mirroring --primary / --clay in app/globals.css.
+// Kept as literals because react-pdf cannot read CSS custom properties —
+// rebranding means changing these AND globals.css (see the note there).
+const INK = "#33261C";
+const SOFT = "#B4552D";
 const GREY = "#555555";
-const LIGHT = "#E6E8F0";
+const LIGHT = "#E8E1D8"; // warm hairline, matching --border
 
 // Logo box (client 5-Aug: "increase the size of the logo"). The height is
 // DERIVED from the asset's own intrinsic aspect rather than hardcoded, so a
@@ -33,12 +38,31 @@ const LOGO_HEIGHT = Math.round(
   (LOGO_WIDTH * BRAND.logoIntrinsic.height) / BRAND.logoIntrinsic.width,
 );
 
-const money = (n: number) =>
-  BRAND.pdfCurrencyPrefix +
-  (n / BRAND.currencyDivisor).toLocaleString(BRAND.currencyLocale, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+/**
+ * A quote's own market dressing, or the deployment's when it has none — every
+ * quote saved before multi-currency, and every admin/staff quote, so their
+ * PDFs render byte-identically to before. A trial's card is priced in its own
+ * currency, so there is no divisor to apply to it.
+ */
+const moneyFor = (currency?: CurrencyCode) => {
+  if (!currency || currency === "INR") {
+    // INR here means the deployment's own card, which BRAND already dresses
+    // (today: the cosmetic dollar skin — see lib/brand.ts).
+    return (n: number) =>
+      BRAND.pdfCurrencyPrefix +
+      (n / BRAND.currencyDivisor).toLocaleString(BRAND.currencyLocale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+  }
+  const meta = CURRENCY_META[currency];
+  return (n: number) =>
+    meta.pdfPrefix +
+    n.toLocaleString(meta.locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+};
 
 const styles = StyleSheet.create({
   page: {
@@ -56,19 +80,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
     borderBottomWidth: 2,
-    borderBottomColor: NAVY,
+    borderBottomColor: INK,
     paddingBottom: 10,
   },
   logo: { width: LOGO_WIDTH, height: LOGO_HEIGHT, objectFit: "contain" },
-  companyName: { fontSize: 13, fontFamily: "Helvetica-Bold", color: NAVY },
-  tagline: { fontSize: 8, color: GOLD, fontFamily: "Helvetica-Oblique", marginTop: 2 },
+  companyName: { fontSize: 13, fontFamily: "Helvetica-Bold", color: INK },
+  tagline: { fontSize: 8, color: SOFT, fontFamily: "Helvetica-Oblique", marginTop: 2 },
   companyMeta: { fontSize: 7.5, color: GREY, marginTop: 4, maxWidth: 230, textAlign: "right" },
   headerRight: { alignItems: "flex-end" },
   // Title
   title: {
     fontSize: 18,
     fontFamily: "Helvetica-Bold",
-    color: NAVY,
+    color: INK,
     letterSpacing: 2,
     marginTop: 16,
     marginBottom: 12,
@@ -79,7 +103,7 @@ const styles = StyleSheet.create({
   blockLabel: {
     fontSize: 8,
     fontFamily: "Helvetica-Bold",
-    color: GOLD,
+    color: SOFT,
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 4,
@@ -89,7 +113,7 @@ const styles = StyleSheet.create({
   metaVal: { fontFamily: "Helvetica-Bold" },
   // Table
   table: { marginBottom: 14 },
-  tHead: { flexDirection: "row", backgroundColor: NAVY, color: "#FFFFFF" },
+  tHead: { flexDirection: "row", backgroundColor: INK, color: "#FFFFFF" },
   tHeadCell: { padding: 6, fontSize: 8, fontFamily: "Helvetica-Bold" },
   tRow: { flexDirection: "row", borderBottomWidth: 0.5, borderBottomColor: LIGHT },
   tCell: { padding: 6 },
@@ -113,7 +137,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 5,
     paddingHorizontal: 6,
-    backgroundColor: NAVY,
+    backgroundColor: INK,
     color: "#FFFFFF",
     marginTop: 2,
   },
@@ -123,14 +147,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 9,
     fontFamily: "Helvetica-Bold",
-    color: NAVY,
+    color: INK,
     marginBottom: 5,
     borderBottomWidth: 0.5,
     borderBottomColor: LIGHT,
     paddingBottom: 3,
   },
   term: { flexDirection: "row", marginBottom: 2 },
-  termBullet: { width: 10, color: GOLD },
+  termBullet: { width: 10, color: SOFT },
   termText: { flex: 1, fontSize: 8, color: GREY },
   // Bank + signatures
   bottomRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
@@ -169,6 +193,7 @@ export function QuotationDocument({
   data: QuotationData;
   logo?: string;
 }) {
+  const money = moneyFor(data.currency);
   const { company, bank } = data;
   return (
     <Document

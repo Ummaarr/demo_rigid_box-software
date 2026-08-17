@@ -57,8 +57,26 @@ const VENDOR_COL: ColDef = { field: "vendor", label: "Vendor" };
 
 export async function loadAllRates(
   supabase: SupabaseClient,
-  role: "admin" | "staff" | null = "admin",
+  role: "admin" | "staff" | "trial" | null = "admin",
+  // null = the shared master card (admin/staff — unchanged behaviour); a
+  // trial user's id = read ONLY their own private clone. Always derive from
+  // the session via ownerScopeFor() in lib/auth.ts, never a client value.
+  ownerId: string | null = null,
+  // The symbol shown in this card's unit labels ("$ / sheet"). Defaults to the
+  // deployment's own dressing, so admin/staff are unchanged; a trial account
+  // passes its own market's symbol (see currencyMetaFor in lib/currency-meta).
+  currencySymbol: string = BRAND.currencySymbol,
 ): Promise<RateSectionData[]> {
+  const sym = currencySymbol;
+  // Every rate table (not app_config) carries owner_id (trial-role isolation
+  // — see supabase/migration-trial-role.sql). Generic in the builder type so
+  // each query keeps its own row typing; the internal cast is only needed
+  // because .is/.eq aren't expressible on a bare type parameter.
+  const own = <T,>(q: T): T =>
+    ownerId == null
+      ? (q as unknown as { is: (c: string, v: null) => T }).is("owner_id", null)
+      : (q as unknown as { eq: (c: string, v: string) => T }).eq("owner_id", ownerId);
+
   const [
     boardRes,
     paperRes,
@@ -85,51 +103,52 @@ export async function loadAllRates(
     marginConfigRes,
     miscRes,
   ] = await Promise.all([
-    supabase.from("board_rates").select("*").order("thickness_mm"),
-    supabase
+    own(supabase.from("board_rates").select("*").order("thickness_mm")),
+    own(supabase
       .from("paper_rates")
       .select("*")
       .order("size_label")
-      .order("gsm"),
-    supabase
+      .order("gsm")),
+    own(supabase
       .from("white_paper_rates")
       .select("*")
       .order("size_label")
-      .order("gsm"),
-    supabase
+      .order("gsm")),
+    own(supabase
       .from("art_card_rates")
       .select("*")
       .order("size_label")
-      .order("gsm"),
-    supabase.from("special_paper_rates").select("*").order("name"),
-    supabase.from("offset_printing_rates").select("*").order("size_label"),
-    supabase.from("digital_printing_rates").select("*").order("size_label"),
-    supabase.from("lamination_rates").select("*").order("type"),
-    supabase.from("foiling_rates").select("*").order("color"),
-    supabase.from("uv_coating_rates").select("*").order("type"),
-    supabase.from("relief_rates").select("*").order("type"),
-    supabase
+      .order("gsm")),
+    own(supabase.from("special_paper_rates").select("*").order("name")),
+    own(supabase.from("offset_printing_rates").select("*").order("size_label")),
+    own(supabase.from("digital_printing_rates").select("*").order("size_label")),
+    own(supabase.from("lamination_rates").select("*").order("type")),
+    own(supabase.from("foiling_rates").select("*").order("color")),
+    own(supabase.from("uv_coating_rates").select("*").order("type")),
+    own(supabase.from("relief_rates").select("*").order("type")),
+    own(supabase
       .from("magnet_rates")
       .select("*")
       .order("diameter_mm")
-      .order("thickness_mm"),
-    supabase.from("washer_rates").select("*").order("name"),
-    supabase
+      .order("thickness_mm")),
+    own(supabase.from("washer_rates").select("*").order("name")),
+    own(supabase
       .from("foam_rates")
       .select("*")
       .order("type")
-      .order("thickness_mm"),
-    supabase.from("reverse_board_rates").select("*").order("thickness_mm"),
-    supabase.from("consumable_rates").select("*").order("name"),
-    supabase.from("labour_rates").select("*").order("name"),
-    supabase.from("ribbon_tag_rates").select("*").order("size_label"),
-    supabase.from("handle_rates").select("*").order("type"),
-    supabase.from("lock_rates").select("*").order("type"),
-    supabase.from("window_rates").select("*").order("name"),
+      .order("thickness_mm")),
+    own(supabase.from("reverse_board_rates").select("*").order("thickness_mm")),
+    own(supabase.from("consumable_rates").select("*").order("name")),
+    own(supabase.from("labour_rates").select("*").order("name")),
+    own(supabase.from("ribbon_tag_rates").select("*").order("size_label")),
+    own(supabase.from("handle_rates").select("*").order("type")),
+    own(supabase.from("lock_rates").select("*").order("type")),
+    own(supabase.from("window_rates").select("*").order("name")),
+    // app_config: global formula config, no owner_id column — unfiltered.
     supabase.from("app_config").select("*").order("key"),
-    supabase.from("margin_config").select("*").order("key"),
+    own(supabase.from("margin_config").select("*").order("key")),
     // Round 3 — tolerate a pre-migration DB (missing table => section omitted).
-    supabase.from("misc_rates").select("*").order("name"),
+    own(supabase.from("misc_rates").select("*").order("name")),
   ]);
 
   // Board `type` (client 18-Jul) — probe for the column so a live DB that
@@ -171,26 +190,26 @@ export async function loadAllRates(
   }
 
   const sections: RateSectionData[] = [
-    withMeta({ id: "board", label: "Kappa Board", category: "Materials", table: "board_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "board", label: "Kappa Board", category: "Materials", table: "board_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [{ field: "thickness_mm", label: "Thickness (mm)" }],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["thickness_mm"],
       newRowTemplate: { thickness_mm: 2, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(boardRes) }),
 
     // Renamed "Printed Paper" -> "Art Paper" (client 4-Jul); table unchanged.
-    withMeta({ id: "paper", label: "Art Paper", category: "Materials", table: "paper_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "paper", label: "Art Paper", category: "Materials", table: "paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         { field: "size_label", label: "Size" },
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
         { field: "gsm", label: "GSM" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(paperRes) }),
 
-    withMeta({ id: "white_paper", label: "White Lining Paper", category: "Materials", table: "white_paper_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "white_paper", label: "White Lining Paper", category: "Materials", table: "white_paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       // name = paper type (client 8-Jul: white paper needs a paper-type column).
       keyCols: [
         { field: "name", label: "Paper type" },
@@ -198,7 +217,7 @@ export async function loadAllRates(
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
         { field: "gsm", label: "GSM" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { name: "White paper", size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(whitePaperRes) }),
@@ -208,14 +227,14 @@ export async function loadAllRates(
     // art_card_rates and the cover material value stays 'art_card', so saved
     // estimates resolve unchanged. Type is dropped from the columns entirely on
     // a pre-migration-board-type DB.
-    withMeta({ id: "art_card", label: "Board", category: "Materials", table: "art_card_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "art_card", label: "Board", category: "Materials", table: "art_card_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         ...(hasBoardType ? [{ field: "type", label: "Type" }] : []),
         { field: "size_label", label: "Size" },
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
         { field: "gsm", label: "GSM" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: [...(hasBoardType ? ["type"] : []), "size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: {
         ...(hasBoardType ? { type: "Art card" } : {}),
@@ -223,13 +242,13 @@ export async function loadAllRates(
       },
       hasDummy: true, rows: boardRows }),
 
-    withMeta({ id: "special_paper", label: "Special Paper", category: "Materials", table: "special_paper_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "special_paper", label: "Special Paper", category: "Materials", table: "special_paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         { field: "name", label: "Name" }, { field: "size_label", label: "Size" },
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
         { field: "gsm", label: "GSM" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { name: "", size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(specialPaperRes) }),
@@ -237,74 +256,74 @@ export async function loadAllRates(
     // Vendor is a KEY column on both printing sections (round 10): the unique
     // key is (size_label, colour, vendor) / (size_label, vendor), so the same
     // size can be quoted by several printers. Blank vendor = the default row.
-    withMeta({ id: "offset", label: "Offset Printing", category: "Printing", table: "offset_printing_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} first 1000 / +1000 sheets`,
+    withMeta({ id: "offset", label: "Offset Printing", category: "Printing", table: "offset_printing_rates", idField: "id", unitLabel: `${sym} first 1000 / +1000 sheets`,
       keyCols: [
         { field: "size_label", label: "Size" },
         { field: "colour", label: "Colour" },
         { field: "vendor", label: "Vendor" },
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
       ],
-      editCols: [{ field: "first_1000", label: `First 1000 (${BRAND.currencySymbol})` }, { field: "additional_1000", label: `+1000 (${BRAND.currencySymbol})` }],
+      editCols: [{ field: "first_1000", label: `First 1000 (${sym})` }, { field: "additional_1000", label: `+1000 (${sym})` }],
       editableKeys: ["size_label", "colour", "vendor", "width_in", "height_in"],
       newRowTemplate: { size_label: "", colour: "multi", vendor: "", width_in: 0, height_in: 0, first_1000: 0, additional_1000: 0 },
       hasDummy: true, rows: rows(offsetRes) }, true),
 
-    withMeta({ id: "digital", label: "Digital Printing", category: "Printing", table: "digital_printing_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "digital", label: "Digital Printing", category: "Printing", table: "digital_printing_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         { field: "size_label", label: "Size" },
         { field: "vendor", label: "Vendor" },
         { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "vendor", "width_in", "height_in"],
       newRowTemplate: { size_label: "", vendor: "", width_in: 0, height_in: 0, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(digitalRes) }, true),
 
-    withMeta({ id: "lamination", label: "Lamination", category: "Finishing", table: "lamination_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per 100 sq in`,
+    withMeta({ id: "lamination", label: "Lamination", category: "Finishing", table: "lamination_rates", idField: "id", unitLabel: `${sym} per 100 sq in`,
       keyCols: [{ field: "type", label: "Type" }],
-      editCols: [{ field: "rate_per_100sqin", label: `${BRAND.currencySymbol} / 100 sq in` }],
+      editCols: [{ field: "rate_per_100sqin", label: `${sym} / 100 sq in` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", rate_per_100sqin: 0 },
       hasDummy: true, rows: rows(laminationRes) }),
 
-    withMeta({ id: "foiling", label: "Foiling", category: "Finishing", table: "foiling_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sq in`,
+    withMeta({ id: "foiling", label: "Foiling", category: "Finishing", table: "foiling_rates", idField: "id", unitLabel: `${sym} per sq in`,
       // finish (client 4-Jul): matte/glossy per colour — prices identical today.
       keyCols: [{ field: "color", label: "Colour" }, { field: "finish", label: "Finish" }],
-      editCols: [{ field: "rate_per_sqin", label: `${BRAND.currencySymbol} / sq in` }],
+      editCols: [{ field: "rate_per_sqin", label: `${sym} / sq in` }],
       editableKeys: ["color", "finish"],
       newRowTemplate: { color: "", finish: "glossy", rate_per_sqin: 0 },
       hasDummy: true, rows: rows(foilingRes) }),
 
-    withMeta({ id: "uv", label: "UV Coating", category: "Finishing", table: "uv_coating_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per unit shown`,
+    withMeta({ id: "uv", label: "UV Coating", category: "Finishing", table: "uv_coating_rates", idField: "id", unitLabel: `${sym} per unit shown`,
       keyCols: [{ field: "type", label: "Type" }, { field: "unit", label: "Unit" }],
-      editCols: [{ field: "rate", label: `Rate (${BRAND.currencySymbol})` }],
+      editCols: [{ field: "rate", label: `Rate (${sym})` }],
       editableKeys: ["type", "unit"],
       newRowTemplate: { type: "", unit: "per_100sqin", rate: 0 },
       hasDummy: true, rows: rows(uvRes) }),
 
-    withMeta({ id: "relief", label: "Relief (Emboss / Deboss)", category: "Finishing", table: "relief_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sq in`,
+    withMeta({ id: "relief", label: "Relief (Emboss / Deboss)", category: "Finishing", table: "relief_rates", idField: "id", unitLabel: `${sym} per sq in`,
       keyCols: [{ field: "type", label: "Type" }],
-      editCols: [{ field: "rate_per_sqin", label: `${BRAND.currencySymbol} / sq in` }],
+      editCols: [{ field: "rate_per_sqin", label: `${sym} / sq in` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", rate_per_sqin: 0 },
       hasDummy: true, rows: rows(reliefRes) }),
 
-    withMeta({ id: "magnets", label: "Magnets", category: "Hardware", table: "magnet_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} each`,
+    withMeta({ id: "magnets", label: "Magnets", category: "Hardware", table: "magnet_rates", idField: "id", unitLabel: `${sym} each`,
       // type column (client 4-Jul: "add a column for magnets that says Type").
       keyCols: [{ field: "type", label: "Type" }, { field: "diameter_mm", label: "Dia. (mm)" }, { field: "thickness_mm", label: "Thick. (mm)" }],
-      editCols: [{ field: "price_each", label: `${BRAND.currencySymbol} / each` }],
+      editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type", "diameter_mm", "thickness_mm"],
       newRowTemplate: { type: "round", diameter_mm: 0, thickness_mm: 0, price_each: 0 },
       hasDummy: true, rows: rows(magnetRes) }),
 
-    withMeta({ id: "washers", label: "Washers", category: "Hardware", table: "washer_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} each`,
+    withMeta({ id: "washers", label: "Washers", category: "Hardware", table: "washer_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "name", label: "Size" }],
-      editCols: [{ field: "price_each", label: `${BRAND.currencySymbol} / each` }],
+      editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["name"],
       newRowTemplate: { name: "", price_each: 0 },
       hasDummy: true, rows: rows(washerRes) }),
 
-    withMeta({ id: "foam", label: "Foam Inserts", category: "Inserts", table: "foam_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per mm (or ${BRAND.currencySymbol} per sheet fallback)`,
+    withMeta({ id: "foam", label: "Foam Inserts", category: "Inserts", table: "foam_rates", idField: "id", unitLabel: `${sym} per mm (or ${sym} per sheet fallback)`,
       keyCols: [
         { field: "type", label: "Type" }, { field: "thickness_mm", label: "Thick. (mm)" },
         { field: "sheet_width_in", label: "Sheet W (in)" }, { field: "sheet_height_in", label: "Sheet H (in)" },
@@ -312,47 +331,47 @@ export async function loadAllRates(
       // rate_per_mm (client 2-Jul): when set (> 0) sheet price = rate x thickness;
       // cost_per_sheet is the flat fallback for rows without a per-mm rate.
       editCols: [
-        { field: "rate_per_mm", label: `${BRAND.currencySymbol} / mm` },
-        { field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet (fallback)` },
+        { field: "rate_per_mm", label: `${sym} / mm` },
+        { field: "cost_per_sheet", label: `${sym} / sheet (fallback)` },
       ],
       editableKeys: ["type", "thickness_mm", "sheet_width_in", "sheet_height_in"],
       newRowTemplate: { type: "XLPE", thickness_mm: 10, sheet_width_in: 0, sheet_height_in: 0, rate_per_mm: 0, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(foamRes) }),
 
-    withMeta({ id: "reverse_board", label: "Reverse Board (insert)", category: "Inserts", table: "reverse_board_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per sheet`,
+    withMeta({ id: "reverse_board", label: "Reverse Board (insert)", category: "Inserts", table: "reverse_board_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [{ field: "thickness_mm", label: "Thickness (mm)" }],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["thickness_mm"],
       newRowTemplate: { thickness_mm: 0, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(reverseBoardRes) }),
 
-    withMeta({ id: "ribbon_tag", label: "Ribbon Tags", category: "Hardware", table: "ribbon_tag_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} each`,
+    withMeta({ id: "ribbon_tag", label: "Ribbon Tags", category: "Hardware", table: "ribbon_tag_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "size_label", label: "Size" }],
-      editCols: [{ field: "price_each", label: `${BRAND.currencySymbol} / each` }],
+      editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["size_label"],
       newRowTemplate: { size_label: "", price_each: 0 },
       hasDummy: true, rows: rows(ribbonTagRes) }),
 
-    withMeta({ id: "handles", label: "Handles", category: "Hardware", table: "handle_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} each`,
+    withMeta({ id: "handles", label: "Handles", category: "Hardware", table: "handle_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "type", label: "Type" }],
-      editCols: [{ field: "price_each", label: `${BRAND.currencySymbol} / each` }],
+      editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", price_each: 0 },
       hasDummy: true, hasImage: true, rows: rows(handleRes) }),
 
-    withMeta({ id: "locks", label: "Locks", category: "Hardware", table: "lock_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} each`,
+    withMeta({ id: "locks", label: "Locks", category: "Hardware", table: "lock_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "type", label: "Type" }],
-      editCols: [{ field: "price_each", label: `${BRAND.currencySymbol} / each` }],
+      editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", price_each: 0 },
       hasDummy: true, hasImage: true, rows: rows(lockRes) }),
 
-    withMeta({ id: "windows", label: "Window Film", category: "Inserts", table: "window_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per film sheet`,
+    withMeta({ id: "windows", label: "Window Film", category: "Inserts", table: "window_rates", idField: "id", unitLabel: `${sym} per film sheet`,
       keyCols: [
         { field: "name", label: "Film" },
         { field: "film_width_in", label: "Sheet W (in)" }, { field: "film_height_in", label: "Sheet H (in)" },
       ],
-      editCols: [{ field: "cost_per_sheet", label: `${BRAND.currencySymbol} / sheet` }],
+      editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "film_width_in", "film_height_in"],
       newRowTemplate: { name: "", film_width_in: 0, film_height_in: 0, cost_per_sheet: 0 },
       hasDummy: true, hasImage: true, rows: rows(windowRes) }),
@@ -360,31 +379,31 @@ export async function loadAllRates(
     // Miscellaneous materials (round 3 — satin, velvet, cloth buckles, …).
     // Omitted entirely on a live DB that hasn't run migration-round3.sql yet.
     ...(miscRes.error ? [] : [
-      withMeta({ id: "misc", label: "Miscellaneous", category: "Other", table: "misc_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per unit shown`,
+      withMeta({ id: "misc", label: "Miscellaneous", category: "Other", table: "misc_rates", idField: "id", unitLabel: `${sym} per unit shown`,
         keyCols: [
           { field: "name", label: "Item" }, { field: "unit", label: "Unit" },
           { field: "width_in", label: "L (in)" }, { field: "height_in", label: "W (in)" },
           { field: "thickness_mm", label: "Thick. (mm)" },
         ],
-        editCols: [{ field: "price", label: `Price (${BRAND.currencySymbol})` }],
+        editCols: [{ field: "price", label: `Price (${sym})` }],
         editableKeys: ["name", "unit", "width_in", "height_in", "thickness_mm"],
         newRowTemplate: { name: "", unit: "each", width_in: 0, height_in: 0, thickness_mm: 0, price: 0 },
         hasDummy: true, hasImage: true, rows: rows(miscRes) }),
     ]),
 
-    withMeta({ id: "consumables", label: "Consumables", category: "Other", table: "consumable_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per unit shown`,
+    withMeta({ id: "consumables", label: "Consumables", category: "Other", table: "consumable_rates", idField: "id", unitLabel: `${sym} per unit shown`,
       keyCols: [{ field: "name", label: "Item" }, { field: "unit", label: "Unit" }],
-      editCols: [{ field: "rate", label: `Rate (${BRAND.currencySymbol})` }],
+      editCols: [{ field: "rate", label: `Rate (${sym})` }],
       editableKeys: ["name", "unit"],
       newRowTemplate: { name: "", unit: "", rate: 0 },
       hasDummy: true, rows: rows(consumableRes) }),
 
-    withMeta({ id: "labour", label: "Labour Roles", category: "Labour", table: "labour_rates", idField: "id", unitLabel: `${BRAND.currencySymbol} per month / day / hour`,
+    withMeta({ id: "labour", label: "Labour Roles", category: "Labour", table: "labour_rates", idField: "id", unitLabel: `${sym} per month / day / hour`,
       keyCols: [{ field: "name", label: "Role" }],
       editCols: [
-        { field: "rate_per_month", label: `${BRAND.currencySymbol} / month` },
-        { field: "rate_per_day", label: `${BRAND.currencySymbol} / day` },
-        { field: "rate_per_hour", label: `${BRAND.currencySymbol} / hour` },
+        { field: "rate_per_month", label: `${sym} / month` },
+        { field: "rate_per_day", label: `${sym} / day` },
+        { field: "rate_per_hour", label: `${sym} / hour` },
       ],
       editableKeys: ["name"],
       newRowTemplate: { name: "", rate_per_month: 0, rate_per_day: 0, rate_per_hour: 0 },
@@ -396,17 +415,24 @@ export async function loadAllRates(
       editCols: [{ field: "value", label: "Value" }],
       hasDummy: false, rows: rows(appConfigRes) },
 
-    { id: "margin", label: "Margin", category: "Configuration", table: "margin_config", idField: "key",
+    // idField "id" (not "key" — round trial-role): once a trial user's own
+    // margin_config row can share a `key` value with the master row, `key`
+    // alone no longer identifies a row uniquely. See schema.sql's v7 block.
+    { id: "margin", label: "Margin", category: "Configuration", table: "margin_config", idField: "id",
       keyCols: [{ field: "key", label: "Setting" }, { field: "description", label: "Description" }],
       editCols: [{ field: "value", label: "Value (%)" }],
       hasDummy: false, rows: rows(marginConfigRes) },
   ];
 
-  // Staff view (round 3: staff can SEE rates and propose changes) — margin is
-  // admin-only by hard rule and app config drives global costing, so both are
-  // stripped SERVER-SIDE before the data ever reaches the browser.
-  if (role !== "admin") {
-    return sections.filter((s) => s.id !== "margin" && s.id !== "app_config");
-  }
-  return sections;
+  // app_config drives global costing and stays admin-only for everyone else
+  // (staff AND trial — it's shared formula config, not something a trial
+  // user's own sandbox should be able to change). Margin is admin-only by
+  // hard rule for STAFF specifically — a trial user keeps their own margin
+  // section (their own cloned row, their own markup input, not a secret).
+  // Both stripped SERVER-SIDE before the data ever reaches the browser.
+  return sections.filter((s) => {
+    if (s.id === "app_config") return role === "admin";
+    if (s.id === "margin") return role === "admin" || role === "trial";
+    return true;
+  });
 }

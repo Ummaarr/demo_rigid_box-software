@@ -9,17 +9,19 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 
-// On-brand palette: navy + gold + supporting grey-blues. Kept restrained so the
-// donut reads professional rather than rainbow-coloured.
+// Warm palette drawn from the brand pair (espresso + clay) and the browns
+// between them, alternating dark/accent the way the original navy+gold ramp
+// did. Restrained on purpose — the donut should read professional, not
+// rainbow-coloured.
 const PALETTE = [
-  "#1f2a5c",
-  "#c6a24c",
-  "#3a4a82",
-  "#6b7494",
-  "#4b5575",
-  "#d8c187",
-  "#9aa0b5",
-  "#b8bccb",
+  "#33261c",
+  "#b4552d",
+  "#5c4432",
+  "#c98155",
+  "#7a6553",
+  "#dcae8b",
+  "#a3968a",
+  "#c9bfb4",
 ];
 
 const config = { count: { label: "Estimates" } } satisfies ChartConfig;

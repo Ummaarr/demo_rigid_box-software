@@ -79,11 +79,23 @@ function pctChange(curr: number, prev: number): number | null {
   return ((curr - prev) / prev) * 100;
 }
 
+/**
+ * `createdBy`: pass a user id to aggregate ONLY that user's own estimates and
+ * quotes (trial accounts — see ownerScopeFor() in lib/auth.ts). Without it a
+ * trial lead's dashboard would total up every other lead's work.
+ * null/omitted = the whole company's figures, as admin and staff have always
+ * seen.
+ */
 export async function loadDashboardStats(
   supabase: SupabaseClient,
   role: UserRole | null,
+  createdBy: string | null = null,
 ): Promise<DashboardStats> {
   const isAdmin = role === "admin";
+  const scope = <T,>(q: T): T =>
+    createdBy == null
+      ? q
+      : (q as unknown as { eq: (c: string, v: string) => T }).eq("created_by", createdBy);
 
   const now = new Date();
   const thisMonthKey = monthKey(now);
@@ -109,26 +121,30 @@ export async function loadDashboardStats(
   const recentCols =
     "id, box_type, quantity, price_per_box, total_price, created_at, client_id, created_by";
   const [allRes, recentRes0, quotesRes] = await Promise.all([
-    supabase.from("estimates").select("box_type, total_price, created_at"),
-    supabase
-      .from("estimates")
-      .select(`${recentCols}, status`)
-      .order("created_at", { ascending: false })
-      .limit(8),
+    scope(supabase.from("estimates").select("box_type, total_price, created_at")),
+    scope(
+      supabase
+        .from("estimates")
+        .select(`${recentCols}, status`)
+        .order("created_at", { ascending: false })
+        .limit(8),
+    ),
     // Quote pipeline (client item 14). Errors when the quotes table doesn't
     // exist yet (pre-migration DB) — the block is simply omitted then.
-    supabase.from("quotes").select("status, quote_no"),
+    scope(supabase.from("quotes").select("status, quote_no")),
   ]);
 
   // 42703 = no status column yet (DB pre-migration-round3.sql). Retry without it.
   let recentData = recentRes0.data as Record<string, unknown>[] | null;
   let recentErr = recentRes0.error;
   if (recentErr && recentErr.code === "42703") {
-    const legacy = await supabase
-      .from("estimates")
-      .select(recentCols)
-      .order("created_at", { ascending: false })
-      .limit(8);
+    const legacy = await scope(
+      supabase
+        .from("estimates")
+        .select(recentCols)
+        .order("created_at", { ascending: false })
+        .limit(8),
+    );
     recentData = legacy.data as Record<string, unknown>[] | null;
     recentErr = legacy.error;
   }

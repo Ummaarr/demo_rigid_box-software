@@ -30,9 +30,8 @@ import {
 import type { EstimateListItem } from "@/lib/db/estimates";
 import type { ClientRow } from "@/lib/db/clients-db";
 import { boxLabel } from "@/lib/box-types";
-import { formatMoney } from "@/lib/currency";
+import { useMoneyFormatter } from "@/lib/currency-context";
 
-const inr = (n: number | null) => (n == null ? "—" : formatMoney(n));
 
 const fmtDate = (s: string) =>
   new Date(s).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -76,6 +75,8 @@ export function QuoteBuilder({
   clients: ClientRow[];
   defaultTerms?: string[];
 }) {
+  const money = useMoneyFormatter();
+  const inr = (n: number | null) => (n == null ? "—" : money(n));
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [clientId, setClientId] = useState("");
   const [search, setSearch] = useState("");

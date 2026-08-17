@@ -24,6 +24,7 @@ import { ResultPanel, type AutoPickInfo, type ResultCost } from "@/components/es
 import type { AdjustableLine, CostAdjustment } from "@/lib/engines/cost";
 import { LiveNesting } from "@/components/estimate/live-nesting";
 import { formatMoney } from "@/lib/currency";
+import { useMoneyFormat, useMoneyFormatter } from "@/lib/currency-context";
 import { BRAND } from "@/lib/brand";
 import {
   FinishingPicker,
@@ -169,13 +170,15 @@ const SECTIONS: SectionDef[] = [
   { id: "sec-charges", step: 5, title: "Charges & overrides", icon: ReceiptText },
 ];
 
-const inr = formatMoney;
-
 // Live echo of numbers the user just typed into this form (e.g. "2 × 1500 =
 // 3000"). Deliberately NOT formatMoney: that applies the demo's display
 // divisor, which would show a total that contradicts the figures still visible
 // in the inputs beside it. Computed results — the result panel, cost view and
 // PDFs — all go through formatMoney and do scale.
+//
+// A trial account has no divisor to dodge (their card is priced in its own
+// currency), so their echo goes through formatMoney with their own dressing —
+// see `echo` in ConsumableField.
 const typedMoney = (n: number) =>
   BRAND.currencySymbol +
   n.toLocaleString(BRAND.currencyLocale, {
@@ -379,6 +382,15 @@ function ConsumableField({
   onRateChange: (n: number) => void;
   units: string[];
 }) {
+  // A trial account's own market symbol; admin/staff fall back to BRAND.
+  const fmt = useMoneyFormat();
+  const symbol = fmt?.symbol ?? BRAND.currencySymbol;
+  // AED's symbol is "AED " — a TRAILING SPACE, so that formatMoney can
+  // prefix a figure as "AED 1,234.50". That space is wrong wherever the
+  // symbol is followed by a word instead of a number ("AED  per litre"), so
+  // label contexts use the trimmed form and only number-prefixing uses the raw.
+  const symbolLabel = symbol.trim();
+  const echo = (n: number) => (fmt ? formatMoney(n, 2, fmt) : typedMoney(n));
   return (
     <div className="flex flex-col gap-2">
       <Label>{label}</Label>
@@ -400,7 +412,7 @@ function ConsumableField({
             value={cost}
             emptyValue={0}
             onValueChange={onCostChange}
-            placeholder={perBox ? `${BRAND.currencySymbol} per box` : `${BRAND.currencySymbol} total`}
+            placeholder={perBox ? `${symbolLabel} per box` : `${symbolLabel} total`}
           />
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch id={`${id}PerBox`} className="scale-90" checked={perBox} onCheckedChange={onPerBoxChange} />
@@ -422,11 +434,11 @@ function ConsumableField({
             value={rate}
             emptyValue={0}
             onValueChange={onRateChange}
-            placeholder={`${BRAND.currencySymbol} per ${unit.replace(/s$/, "")}`}
+            placeholder={`${symbolLabel} per ${unit.replace(/s$/, "")}`}
           />
           <p className="text-xs text-muted-foreground">
             {qty > 0 && rate > 0
-              ? `${qty} ${unit} × ${BRAND.currencySymbol}${rate} = ${typedMoney(qty * rate)}`
+              ? `${qty} ${unit} × ${symbol}${rate} = ${echo(qty * rate)}`
               : "Quantity also prints on the raw-material sheet."}
           </p>
         </>
@@ -447,6 +459,17 @@ export function EstimateForm({
   sourceEstimateId?: string;
   clients?: ClientRow[];
 }) {
+  const inr = useMoneyFormatter();
+  const moneyFormat = useMoneyFormat();
+  // The signed-in session's currency SYMBOL, for labels and placeholders that
+  // show the unit rather than a formatted figure ("Unit price AED", "$ each").
+  // A trial account prices in its own market, so BRAND — which is the
+  // DEPLOYMENT's dressing — is only the admin/staff fallback here, never the
+  // value a trial should see.
+  const moneySymbol = moneyFormat?.symbol ?? BRAND.currencySymbol;
+  // Trimmed variant for label text — see the note in ConsumableField: the
+  // AED symbol carries a trailing space for number-prefixing.
+  const moneyLabel = moneySymbol.trim();
   // Core
   const [clientId, setClientId] = useState("");
   // Optional estimate name (client 8-Jul: "can I name the estimate?").
@@ -674,6 +697,9 @@ export function EstimateForm({
   const [metlockUnit, setMetlockUnit] = useState("bottles");
   const [metlockRate, setMetlockRate] = useState(0);
   const [tapeTotal, setTapeTotal] = useState(0); // open-input tape override (e.g. collapsible)
+  // Defaults ON: tape was always charged before this toggle existed, so a
+  // fresh form has to behave the same way (see manual.tapeUsed in types).
+  const [tapeUsed, setTapeUsed] = useState(true);
   // Additional charges (no margin): Die / Mould / Block each have qty + unit price; shown separately on PDF.
   const [addlDieQty, setAddlDieQty] = useState(0);
   const [addlDiePrice, setAddlDiePrice] = useState(0);
@@ -917,6 +943,8 @@ export function EstimateForm({
     setGlueTotal(s.manual?.glueTotal ?? 0);
     setMetlockTotal(s.manual?.metlockTotal ?? 0);
     setTapeTotal(s.manual?.tapeTotal ?? 0);
+    // Absent on every snapshot saved before the toggle -> tape was used.
+    setTapeUsed(s.manual?.tapeUsed ?? true);
     // Quantity mode is remembered when the snapshot carries a count.
     const gq = s.manual?.glueQty;
     setGlueMode(gq ? "qty" : "cost");
@@ -1327,11 +1355,15 @@ export function EstimateForm({
           ? metlockTotal * quantity
           : metlockTotal;
     const manual =
-      glueResolved > 0 || metlockResolved > 0 || tapeTotal > 0
+      glueResolved > 0 || metlockResolved > 0 || tapeTotal > 0 || !tapeUsed
         ? {
             glueTotal: glueResolved || undefined,
             metlockTotal: metlockResolved || undefined,
-            tapeTotal: tapeTotal || undefined,
+            // Amount is meaningless with the toggle off, so it is not sent.
+            tapeTotal: tapeUsed ? tapeTotal || undefined : undefined,
+            // OMITTED when tape is used, so a snapshot taken before this
+            // toggle existed and one taken now are byte-identical.
+            tapeUsed: tapeUsed ? undefined : false,
             glueQty:
               glueMode === "qty" && glueQty > 0
                 ? { qty: glueQty, unit: glueUnit, rate: glueRate }
@@ -2891,7 +2923,7 @@ export function EstimateForm({
                         <NumberField id="cardGsm" step="1" min="0" value={cardGsm} onValueChange={setCardGsm} />
                       </div>
                     </div>
-                    <Label htmlFor="cardTotal">Total cost ({BRAND.currencySymbol}, manual)</Label>
+                    <Label htmlFor="cardTotal">Total cost ({moneyLabel}, manual)</Label>
                     <NumberField id="cardTotal" step="0.01" min="0" value={cardTotal} onValueChange={setCardTotal} />
                   </div>
                 )}
@@ -3035,7 +3067,7 @@ export function EstimateForm({
                     <span className="w-20">L ({UNIT_LABELS[miscUnit]})</span>
                     <span className="w-20">W ({UNIT_LABELS[miscUnit]})</span>
                     <span className="w-16">Units</span>
-                    <span className="w-24">{BRAND.currencySymbol} / unit</span>
+                    <span className="w-24">{moneyLabel} / unit</span>
                     <span className="w-16 text-center">Per box</span>
                     <span className="w-7" />
                   </div>
@@ -3187,9 +3219,30 @@ export function EstimateForm({
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="tape">Tape — total override ({BRAND.currencySymbol}, optional)</Label>
-                <NumberField id="tape" step="0.01" min="0" value={tapeTotal} emptyValue={0} onValueChange={setTapeTotal} placeholder="blank = auto per tray / lid" />
-                <span className="text-xs text-muted-foreground">For collapsible boxes — overrides the automatic per-tray/lid tape cost.</span>
+                <Label>Tape</Label>
+                <div className="flex items-center gap-2">
+                  <Switch id="tapeUsed" className="scale-90" checked={tapeUsed} onCheckedChange={setTapeUsed} />
+                  <Label htmlFor="tapeUsed" className="font-normal">This box uses tape</Label>
+                </div>
+                {tapeUsed && (
+                  <NumberField
+                    id="tape"
+                    aria-label={`Tape total override in ${moneyLabel}`}
+                    step="0.01"
+                    min="0"
+                    value={tapeTotal}
+                    emptyValue={0}
+                    onValueChange={setTapeTotal}
+                    placeholder={`${moneyLabel} total — blank = auto per tray / lid`}
+                  />
+                )}
+                <span className="text-xs text-muted-foreground">
+                  Off — no tape is charged. On and left blank — charged automatically,
+                  one per tray and lid at the rate-card rate. On with an amount — that
+                  amount is the total tape cost for the whole order, replacing the
+                  automatic figure (useful for collapsible boxes, where the per-tray/lid
+                  count doesn&apos;t match what the floor actually uses).
+                </span>
               </div>
             </div>
 
@@ -3216,7 +3269,7 @@ export function EstimateForm({
               <div className="grid grid-cols-[80px_1fr_1fr_60px] items-center gap-2 text-xs text-muted-foreground">
                 <span />
                 <span>Qty</span>
-                <span>Unit price {BRAND.currencySymbol}</span>
+                <span>Unit price {moneyLabel}</span>
                 <span className="text-right">Total</span>
               </div>
               {([
@@ -3227,17 +3280,22 @@ export function EstimateForm({
                 <div key={label} className="grid grid-cols-[80px_1fr_1fr_60px] items-center gap-2">
                   <span className="text-sm font-medium">{label}</span>
                   <NumberField aria-label={`${label} qty`} step="1" min="0" value={qty} emptyValue={0} onValueChange={setQty} placeholder="Qty" />
-                  <NumberField aria-label={`${label} price`} step="0.01" min="0" value={price} emptyValue={0} onValueChange={setPrice} placeholder={`${BRAND.currencySymbol} each`} />
-                  <span className="text-xs text-muted-foreground text-right">{BRAND.currencySymbol}{(qty * price).toFixed(0)}</span>
+                  <NumberField aria-label={`${label} price`} step="0.01" min="0" value={price} emptyValue={0} onValueChange={setPrice} placeholder={`${moneyLabel} each`} />
+                  <span className="text-xs text-muted-foreground text-right">{moneySymbol}{(qty * price).toFixed(0)}</span>
                 </div>
               ))}
               <div className="flex flex-col gap-2">
-                <Label>Designer charges ({BRAND.currencySymbol})</Label>
+                <Label>Designer charges ({moneyLabel})</Label>
                 <NumberField step="0.01" min="0" value={addlDesigner} emptyValue={0} onValueChange={setAddlDesigner} />
               </div>
             </div>
 
-            {role === "admin" && (
+            {/* Trial accounts set their own margin: it's their markup on
+                their own private estimate, from their own cloned
+                margin_config row — not the company's. Staff still never see
+                it. Mirrored server-side in costForRole() and both estimate
+                routes' override stripping. */}
+            {(role === "admin" || role === "trial") && (
               <div className="grid grid-cols-2 gap-3 border-t pt-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="overhead">Overhead % (blank = default 11)</Label>
@@ -3353,6 +3411,7 @@ export function EstimateForm({
                   buildRequest(),
                   result.cost as unknown as CostBreakdown,
                   result.materials,
+                  moneyFormat,
                 )}
                 onEditLine={editLine}
                 onResetLine={resetLine}

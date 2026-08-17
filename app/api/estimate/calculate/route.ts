@@ -3,7 +3,7 @@
 // the DB, runs Engine 1 + Engine 2, and returns the breakdown — with margin
 // stripped for non-admin (Staff) callers. All Supabase access is server-side.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
 import { buildEstimate, costForRole } from "@/lib/estimate/build-estimate";
 import { isEstimateError } from "@/lib/estimate/errors";
 import type { EstimateRequest } from "@/types";
@@ -21,14 +21,15 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  // Only admins may override overhead/margin; ignore them otherwise.
-  if (session.role !== "admin") {
+  // Only admins and trial accounts (their own margin, on their own private
+  // estimate) may override overhead/margin; ignore it otherwise.
+  if (session.role !== "admin" && session.role !== "trial") {
     delete body.overheadPct;
     delete body.marginPct;
   }
 
   try {
-    const built = await buildEstimate(body);
+    const built = await buildEstimate(body, undefined, ownerScopeFor(session));
     return Response.json({
       materials: built.materials,
       cost: costForRole(built.cost, session.role),

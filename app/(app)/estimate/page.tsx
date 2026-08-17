@@ -4,7 +4,7 @@
 // When ?from=<id> is present the form is pre-filled from the saved estimate's
 // specs_snapshot (edit / re-run flow).
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadEstimateDetail } from "@/lib/db/estimates";
 import { loadClientsList } from "@/lib/db/clients-db";
@@ -21,9 +21,10 @@ export default async function EstimatePage({
   const { from } = await searchParams;
 
   const admin = createAdminClient();
+  const scope = ownerScopeFor(session);
   const [detail, clients] = await Promise.all([
-    from ? loadEstimateDetail(admin, from) : Promise.resolve(null),
-    loadClientsList(admin),
+    from ? loadEstimateDetail(admin, from, scope) : Promise.resolve(null),
+    loadClientsList(admin, scope),
   ]);
   const initialSpecs: EstimateRequest | undefined = detail?.specs_snapshot;
 

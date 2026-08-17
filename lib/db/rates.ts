@@ -145,18 +145,24 @@ export interface ResolvedRates {
 
 // --- low-level helpers ----------------------------------------------------
 
-/** Fetch a single matching row (or null) from a rate table. */
+/**
+ * Fetch a single matching row (or null) from a rate table, scoped to an
+ * owner (trial-role isolation — see supabase/migration-trial-role.sql).
+ * `ownerId` NULL = the shared master card (admin/staff, unchanged behaviour);
+ * a real user id = that trial user's own private clone. Every rate table
+ * this is ever called against has an `owner_id` column — app_config (which
+ * doesn't) is read via a separate path in configValue() below, never here.
+ */
 async function row<T>(
   supabase: SupabaseClient,
   table: string,
   cols: string,
   filters: Record<string, string | number>,
+  ownerId: string | null,
 ): Promise<T | null> {
-  const { data, error } = await supabase
-    .from(table)
-    .select(cols)
-    .match(filters)
-    .maybeSingle();
+  let q = supabase.from(table).select(cols).match(filters);
+  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
+  const { data, error } = await q.maybeSingle();
   if (error) {
     throw new Error(`rate lookup failed for ${table}: ${error.message}`);
   }
@@ -171,7 +177,8 @@ type CoverPaperRow = { cost_per_sheet: number; width_in: number; height_in: numb
  * errors — retry without it (such a DB can only hold one board type anyway).
  */
 /**
- * Printing-rate lookup with the round-10 VENDOR dimension.
+ * Printing-rate lookup with the round-10 VENDOR dimension, also scoped by
+ * owner (trial-role isolation, same reasoning as row() above).
  *
  * `vendor` set   -> filter to that vendor's row.
  * `vendor` unset -> do NOT filter (PostgREST cannot express `vendor is null`
@@ -189,12 +196,14 @@ async function printRow<T>(
   table: string,
   cols: string,
   filters: Record<string, string | number>,
+  ownerId: string | null,
   vendor?: string,
 ): Promise<T | null> {
   let q = supabase.from(table).select(cols).match(filters);
   q = vendor
     ? q.eq("vendor", vendor)
     : q.order("vendor", { ascending: true, nullsFirst: true });
+  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
   const { data, error } = await q.limit(1).maybeSingle();
   if (error) {
     throw new Error(`rate lookup failed for ${table}: ${error.message}`);
@@ -211,11 +220,12 @@ async function boardRow(
   cols: string,
   base: Record<string, string | number>,
   boardType: string,
+  ownerId: string | null,
 ): Promise<CoverPaperRow | null> {
   try {
-    return await row<CoverPaperRow>(supabase, "art_card_rates", cols, { ...base, type: boardType });
+    return await row<CoverPaperRow>(supabase, "art_card_rates", cols, { ...base, type: boardType }, ownerId);
   } catch {
-    return await row<CoverPaperRow>(supabase, "art_card_rates", cols, base);
+    return await row<CoverPaperRow>(supabase, "art_card_rates", cols, base, ownerId);
   }
 }
 
@@ -253,6 +263,7 @@ async function resolveCoverStock(
   supabase: SupabaseClient,
   cs: CoverStockSel,
   label: string,
+  ownerId: string | null,
 ): Promise<CoverStockRate> {
   let out: CoverStockRate;
   if (cs.material === "special") {
@@ -262,6 +273,7 @@ async function resolveCoverStock(
         "special_paper_rates",
         "cost_per_sheet, width_in, height_in",
         { name: cs.specialPaperName ?? "", size_label: cs.specialSizeLabel ?? "" },
+        ownerId,
       ),
       `${label} special paper ${cs.specialPaperName} ${cs.specialSizeLabel}`,
     );
@@ -278,8 +290,8 @@ async function resolveCoverStock(
     // DEFAULT_BOARD_TYPE, so that is the correct fallback.
     const p = need(
       isBoard
-        ? await boardRow(supabase, cols, base, cs.boardType ?? DEFAULT_BOARD_TYPE)
-        : await row<CoverPaperRow>(supabase, "paper_rates", cols, base),
+        ? await boardRow(supabase, cols, base, cs.boardType ?? DEFAULT_BOARD_TYPE, ownerId)
+        : await row<CoverPaperRow>(supabase, "paper_rates", cols, base, ownerId),
       `${label} ${isBoard ? `board ${cs.boardType ?? DEFAULT_BOARD_TYPE}` : "paper"} ${cs.paperSizeLabel} ${cs.gsm}gsm`,
     );
     out = { costPerSheet: p.cost_per_sheet, sheet: { width_in: p.width_in, height_in: p.height_in } };
@@ -294,6 +306,7 @@ async function resolveCoverStock(
         await printRow<{ first_1000: number; additional_1000: number; width_in: number; height_in: number }>(
           supabase, "offset_printing_rates", "first_1000, additional_1000, width_in, height_in",
           { size_label: printLabel, colour: cs.printing.colour ?? "multi" },
+          ownerId,
           cs.printing.vendor,
         ),
         `${label} offset printing ${printLabel} (${cs.printing.colour ?? "multi"})${vendorSuffix(cs.printing.vendor)}`,
@@ -305,6 +318,7 @@ async function resolveCoverStock(
         await printRow<{ cost_per_sheet: number; width_in: number; height_in: number }>(
           supabase, "digital_printing_rates", "cost_per_sheet, width_in, height_in",
           { size_label: printLabel },
+          ownerId,
           cs.printing.vendor,
         ),
         `${label} digital printing ${printLabel}${vendorSuffix(cs.printing.vendor)}`,
@@ -334,6 +348,7 @@ export interface ResolvedWrap {
 async function resolveOuterWrap(
   supabase: SupabaseClient,
   sel: NonNullable<EstimateRequest["wrapping"]>["outer"] & object,
+  ownerId: string | null,
   label = "",
 ): Promise<ResolvedWrap> {
   const pfx = label ? `${label} ` : "";
@@ -348,6 +363,7 @@ async function resolveOuterWrap(
         "paper_rates",
         "cost_per_sheet, width_in, height_in",
         { size_label: paperLabel, gsm: sel.gsm },
+        ownerId,
       ),
       `${pfx}paper ${paperLabel} ${sel.gsm}gsm`,
     );
@@ -364,6 +380,7 @@ async function resolveOuterWrap(
           // colour (client 6-Jul): multicolour vs single-colour; default multi
           // for legacy snapshots that predate the colour field.
           { size_label: printLabel, colour: sel.printing.colour ?? "multi" },
+          ownerId,
           sel.printing.vendor,
         ),
         `${pfx}offset printing ${printLabel} (${sel.printing.colour ?? "multi"})${vendorSuffix(sel.printing.vendor)}`,
@@ -377,6 +394,7 @@ async function resolveOuterWrap(
           "digital_printing_rates",
           "cost_per_sheet, width_in, height_in",
           { size_label: printLabel },
+          ownerId,
           sel.printing.vendor,
         ),
         `${pfx}digital printing ${printLabel}${vendorSuffix(sel.printing.vendor)}`,
@@ -398,6 +416,7 @@ async function resolveOuterWrap(
       "special_paper_rates",
       "cost_per_sheet, width_in, height_in",
       { name: sel.specialPaperName, size_label: sel.specialSizeLabel },
+      ownerId,
     ),
     `${pfx}special paper ${sel.specialPaperName} ${sel.specialSizeLabel}`,
   );
@@ -414,6 +433,7 @@ async function resolveOuterWrap(
 async function resolveInnerWrap(
   supabase: SupabaseClient,
   sel: NonNullable<NonNullable<EstimateRequest["wrapping"]>["inner"]>,
+  ownerId: string | null,
   label = "",
 ): Promise<ResolvedWrap> {
   const pfx = label ? `${label} ` : "";
@@ -425,6 +445,7 @@ async function resolveInnerWrap(
         "special_paper_rates",
         "cost_per_sheet, width_in, height_in",
         { name: sel.specialPaperName, size_label: sel.specialSizeLabel },
+        ownerId,
       ),
       `${pfx}inner special paper ${sel.specialPaperName} ${sel.specialSizeLabel}`,
     );
@@ -439,6 +460,7 @@ async function resolveInnerWrap(
         "white_paper_rates",
         "cost_per_sheet, width_in, height_in",
         { size_label: sel.paperSizeLabel, gsm: sel.gsm },
+        ownerId,
       ),
       `${pfx}white lining paper ${sel.paperSizeLabel} ${sel.gsm}gsm`,
     );
@@ -456,6 +478,7 @@ async function resolveInnerWrap(
       "paper_rates",
       "cost_per_sheet, width_in, height_in",
       { size_label: innerPaperLabel, gsm: sel.gsm },
+      ownerId,
     ),
     `${pfx}inner paper ${innerPaperLabel} ${sel.gsm}gsm`,
   );
@@ -473,6 +496,7 @@ async function resolveInnerWrap(
         await printRow<{ first_1000: number; additional_1000: number; width_in: number; height_in: number }>(
           supabase, "offset_printing_rates", "first_1000, additional_1000, width_in, height_in",
           { size_label: innerPrintLabel, colour: sel.printing.colour ?? "multi" },
+          ownerId,
           sel.printing.vendor,
         ),
         `${pfx}inner offset printing ${innerPrintLabel} (${sel.printing.colour ?? "multi"})${vendorSuffix(sel.printing.vendor)}`,
@@ -484,6 +508,7 @@ async function resolveInnerWrap(
         await printRow<{ cost_per_sheet: number; width_in: number; height_in: number }>(
           supabase, "digital_printing_rates", "cost_per_sheet, width_in, height_in",
           { size_label: innerPrintLabel },
+          ownerId,
           sel.printing.vendor,
         ),
         `${pfx}inner digital printing ${innerPrintLabel}${vendorSuffix(sel.printing.vendor)}`,
@@ -496,13 +521,29 @@ async function resolveInnerWrap(
 }
 
 /** Read one numeric scalar from a key/value config table.
- *  Exported for the round-5 auto-printing evaluator (same defaults contract). */
+ *  Exported for the round-5 auto-printing evaluator (same defaults contract).
+ *  app_config has no owner_id column — it's global formula config, read the
+ *  same way regardless of role — so it bypasses row()'s owner filter
+ *  entirely; margin_config DOES have owner_id (a trial user's own margin
+ *  input, see schema.sql) and goes through row() like every rate table. */
 export async function configValue(
   supabase: SupabaseClient,
   table: "app_config" | "margin_config",
   key: string,
+  ownerId: string | null,
 ): Promise<number | null> {
-  const r = await row<{ value: number }>(supabase, table, "value", { key });
+  if (table === "app_config") {
+    const { data, error } = await supabase
+      .from(table)
+      .select("value")
+      .match({ key })
+      .maybeSingle();
+    if (error) {
+      throw new Error(`rate lookup failed for ${table}: ${error.message}`);
+    }
+    return data ? Number((data as { value: number }).value) : null;
+  }
+  const r = await row<{ value: number }>(supabase, table, "value", { key }, ownerId);
   return r ? Number(r.value) : null;
 }
 
@@ -525,6 +566,7 @@ async function resolveFinishing(
   sels: FinishingSelection[] | undefined,
   dims: { length_in: number; width_in: number },
   label: string,
+  ownerId: string | null,
 ): Promise<FinishingRate[]> {
   const out: FinishingRate[] = [];
   for (const f of sels ?? []) {
@@ -534,7 +576,7 @@ async function resolveFinishing(
     const itemAreaSqIn = (rawL + 2 * pad_in) * (rawW + 2 * pad_in);
     if (f.kind === "lamination") {
       const r = need(
-        await row<{ rate_per_100sqin: number }>(supabase, "lamination_rates", "rate_per_100sqin", { type: f.key }),
+        await row<{ rate_per_100sqin: number }>(supabase, "lamination_rates", "rate_per_100sqin", { type: f.key }, ownerId),
         `${label} lamination ${f.key}`,
       );
       // key/finish ride along for the round-6 itemized breakdown labels.
@@ -546,18 +588,16 @@ async function resolveFinishing(
       // migration-round3.sql (single row per colour, no finish column) —
       // resolve exactly as before.
       let foils: { rate_per_sqin: number; finish?: string | null }[];
-      const foilRes = await supabase
-        .from("foiling_rates")
-        .select("rate_per_sqin, finish")
-        .eq("color", f.key);
+      let foilQ = supabase.from("foiling_rates").select("rate_per_sqin, finish").eq("color", f.key);
+      foilQ = ownerId == null ? foilQ.is("owner_id", null) : foilQ.eq("owner_id", ownerId);
+      const foilRes = await foilQ;
       if (foilRes.error) {
         // 42703 = undefined column: DB predates migration-round3.sql (no finish yet).
         if (foilRes.error.code !== "42703")
           throw new Error(`rate lookup failed for foiling_rates: ${foilRes.error.message}`);
-        const legacy = await supabase
-          .from("foiling_rates")
-          .select("rate_per_sqin")
-          .eq("color", f.key);
+        let legacyQ = supabase.from("foiling_rates").select("rate_per_sqin").eq("color", f.key);
+        legacyQ = ownerId == null ? legacyQ.is("owner_id", null) : legacyQ.eq("owner_id", ownerId);
+        const legacy = await legacyQ;
         if (legacy.error) throw new Error(`rate lookup failed for foiling_rates: ${legacy.error.message}`);
         foils = (legacy.data ?? []) as { rate_per_sqin: number }[];
       } else {
@@ -578,13 +618,13 @@ async function resolveFinishing(
       });
     } else if (f.kind === "uv") {
       const r = need(
-        await row<{ rate: number; unit: "per_100sqin" | "per_sqin" }>(supabase, "uv_coating_rates", "rate, unit", { type: f.key }),
+        await row<{ rate: number; unit: "per_100sqin" | "per_sqin" }>(supabase, "uv_coating_rates", "rate, unit", { type: f.key }, ownerId),
         `${label} uv ${f.key}`,
       );
       out.push({ kind: "uv", rate: r.rate, unit: r.unit, designAreaSqIn: r.unit === "per_sqin" ? itemAreaSqIn : undefined, key: f.key });
     } else {
       const r = need(
-        await row<{ rate_per_sqin: number }>(supabase, "relief_rates", "rate_per_sqin", { type: f.key }),
+        await row<{ rate_per_sqin: number }>(supabase, "relief_rates", "rate_per_sqin", { type: f.key }, ownerId),
         `${label} relief ${f.key}`,
       );
       out.push({ kind: "relief", ratePerSqin: r.rate_per_sqin, designAreaSqIn: itemAreaSqIn, key: f.key });
@@ -595,9 +635,16 @@ async function resolveFinishing(
 
 // --- orchestrator ---------------------------------------------------------
 
+/**
+ * `ownerId`: null reads the shared master rate card (admin/staff — unchanged
+ * behaviour); a trial user's id reads ONLY their own private clone (see
+ * ownerScopeFor() in lib/auth.ts, the single place this is derived from a
+ * session — never trust a client-sent value).
+ */
 export async function loadEstimateRates(
   supabase: SupabaseClient,
   req: EstimateRequest,
+  ownerId: string | null,
 ): Promise<ResolvedRates> {
   // Board (required) — sheet size comes from the rate row.
   const board = need(
@@ -606,6 +653,7 @@ export async function loadEstimateRates(
       "board_rates",
       "cost_per_sheet, sheet_width_in, sheet_height_in",
       { thickness_mm: req.boardThickness_mm },
+      ownerId,
     ),
     `board ${req.boardThickness_mm}mm`,
   );
@@ -614,14 +662,14 @@ export async function loadEstimateRates(
   let outer: ResolvedRates["outer"];
   let printing: PrintingRate = { mode: "none" };
   let foldingAllowance_mm =
-    (await configValue(supabase, "app_config", "folding_allowance_mm")) ?? 20;
+    (await configValue(supabase, "app_config", "folding_allowance_mm", ownerId)) ?? 20;
 
   const outerSel = req.wrapping?.outer;
   if (outerSel) {
     if (outerSel.foldingAllowance_mm != null) {
       foldingAllowance_mm = outerSel.foldingAllowance_mm;
     }
-    const w = await resolveOuterWrap(supabase, outerSel);
+    const w = await resolveOuterWrap(supabase, outerSel, ownerId);
     outer = { costPerSheet: w.costPerSheet, sheet: w.sheet, printSheet: w.printSheet };
     printing = w.printing;
   }
@@ -632,7 +680,7 @@ export async function loadEstimateRates(
   let innerPrinting: ResolvedRates["innerPrinting"];
   const innerSel = req.wrapping?.inner;
   if (innerSel) {
-    const w = await resolveInnerWrap(supabase, innerSel);
+    const w = await resolveInnerWrap(supabase, innerSel, ownerId);
     inner = { costPerSheet: w.costPerSheet, sheet: w.sheet, printSheet: w.printSheet };
     if (w.printing.mode !== "none") innerPrinting = w.printing;
   }
@@ -647,7 +695,7 @@ export async function loadEstimateRates(
     for (const [component, cw] of Object.entries(perSel)) {
       const entry: NonNullable<ResolvedRates["perComponent"]>[string] = {};
       if (cw.outer) {
-        const w = await resolveOuterWrap(supabase, cw.outer, component);
+        const w = await resolveOuterWrap(supabase, cw.outer, ownerId, component);
         entry.outer = {
           costPerSheet: w.costPerSheet,
           sheet: w.sheet,
@@ -657,7 +705,7 @@ export async function loadEstimateRates(
         };
       }
       if (cw.inner) {
-        const w = await resolveInnerWrap(supabase, cw.inner, component);
+        const w = await resolveInnerWrap(supabase, cw.inner, ownerId, component);
         entry.inner = {
           costPerSheet: w.costPerSheet,
           sheet: w.sheet,
@@ -666,13 +714,13 @@ export async function loadEstimateRates(
         };
         if (cw.inner.finishing?.length) {
           entry.innerFinishing = await resolveFinishing(
-            supabase, cw.inner.finishing, req.dims, `${component} inner`,
+            supabase, cw.inner.finishing, req.dims, `${component} inner`, ownerId,
           );
         }
       }
       if (cw.finishing?.length) {
         entry.finishing = await resolveFinishing(
-          supabase, cw.finishing, req.dims, `${component} outer`,
+          supabase, cw.finishing, req.dims, `${component} outer`, ownerId,
         );
       }
       perComponent[component] = entry;
@@ -680,12 +728,12 @@ export async function loadEstimateRates(
   }
 
   // Inner liner finishing (same rate tables as outer; typically lamination only).
-  const innerFinishing = await resolveFinishing(supabase, innerSel?.finishing, req.dims, "inner");
+  const innerFinishing = await resolveFinishing(supabase, innerSel?.finishing, req.dims, "inner", ownerId);
 
   // Outer finishing — each per-sq-inch item carries its own design area (from the form's per-item
   // L×W input, or box footprint as default). A wastageAllowance_mm (default 10 mm each side,
   // client 27-Jun) expands the area to cover plate/foil overlap: (L + 2×pad) × (W + 2×pad).
-  const finishing = await resolveFinishing(supabase, req.finishing, req.dims, "outer");
+  const finishing = await resolveFinishing(supabase, req.finishing, req.dims, "outer", ownerId);
 
   // Inserts: foam(s) + reverse board (+ top paper).
   // Old snapshots carry a single `foam`; new requests carry `foams[]`.
@@ -703,6 +751,7 @@ export async function loadEstimateRates(
           "foam_rates",
           "*",
           { type: sel.type, thickness_mm: sel.thickness_mm },
+          ownerId,
         ),
         `foam ${sel.type} ${sel.thickness_mm}mm`,
       );
@@ -720,10 +769,10 @@ export async function loadEstimateRates(
       let cover: NonNullable<ResolvedRates["foams"]>[number]["cover"];
       const cs = sel.cover;
       if (cs && (cs.top || cs.bottom)) {
-        cover = await resolveCoverStock(supabase, cs, "foam cover");
+        cover = await resolveCoverStock(supabase, cs, "foam cover", ownerId);
         // Optional finishing on the cover (client 7-Jul: full wrap parity).
         if (cs.finishing?.length) {
-          cover.finishing = await resolveFinishing(supabase, cs.finishing, req.dims, "foam cover");
+          cover.finishing = await resolveFinishing(supabase, cs.finishing, req.dims, "foam cover", ownerId);
         }
       }
 
@@ -744,6 +793,7 @@ export async function loadEstimateRates(
         "reverse_board_rates",
         "cost_per_sheet, sheet_width_in, sheet_height_in",
         { thickness_mm: req.inserts.reverseBoard.thickness_mm },
+        ownerId,
       ),
       `reverse board ${req.inserts.reverseBoard.thickness_mm}mm`,
     );
@@ -757,6 +807,7 @@ export async function loadEstimateRates(
           "paper_rates",
           "cost_per_sheet, width_in, height_in",
           { size_label: tp.paperSizeLabel, gsm: tp.gsm },
+          ownerId,
         ),
         `top paper ${tp.paperSizeLabel} ${tp.gsm}gsm`,
       );
@@ -769,13 +820,14 @@ export async function loadEstimateRates(
   let sleeve: ResolvedRates["sleeve"];
   if (req.inserts?.sleeve) {
     const sel = req.inserts.sleeve;
-    sleeve = await resolveCoverStock(supabase, sel.stock, "sleeve");
+    sleeve = await resolveCoverStock(supabase, sel.stock, "sleeve", ownerId);
     if (sel.stock.finishing?.length) {
       sleeve.finishing = await resolveFinishing(
         supabase,
         sel.stock.finishing,
         { length_in: sel.dims.length_in, width_in: sel.dims.width_in },
         "sleeve",
+        ownerId,
       );
     }
   }
@@ -792,9 +844,10 @@ export async function loadEstimateRates(
       supabase,
       sel.stock,
       label,
+      ownerId,
     );
     if (sel.stock.lamination?.length) {
-      stock.finishing = await resolveFinishing(supabase, sel.stock.lamination, req.dims, label);
+      stock.finishing = await resolveFinishing(supabase, sel.stock.lamination, req.dims, label, ownerId);
     }
     return stock;
   };
@@ -808,7 +861,7 @@ export async function loadEstimateRates(
   const ribbonSize = req.inserts?.ribbonTagSizeLabel ?? (autoRibbon ? "10mm" : undefined);
   if (ribbonSize) {
     const r = need(
-      await row<{ price_each: number }>(supabase, "ribbon_tag_rates", "price_each", { size_label: ribbonSize }),
+      await row<{ price_each: number }>(supabase, "ribbon_tag_rates", "price_each", { size_label: ribbonSize }, ownerId),
       `ribbon tag ${ribbonSize}`,
     );
     ribbonTagEach = r.price_each;
@@ -826,13 +879,13 @@ export async function loadEstimateRates(
       await row<{ price_each: number }>(supabase, "magnet_rates", "price_each", {
         diameter_mm: a.magnetDiameter_mm,
         thickness_mm: a.magnetThickness_mm,
-      }),
+      }, ownerId),
       `magnet ${a.magnetDiameter_mm}x${a.magnetThickness_mm}mm`,
     );
     magnetEach = m.price_each;
     const washerName = a.washerName ?? `${a.magnetDiameter_mm}mm`;
     const w = need(
-      await row<{ price_each: number }>(supabase, "washer_rates", "price_each", { name: washerName }),
+      await row<{ price_each: number }>(supabase, "washer_rates", "price_each", { name: washerName }, ownerId),
       `washer ${washerName}`,
     );
     washerEach = w.price_each;
@@ -842,7 +895,7 @@ export async function loadEstimateRates(
   let handleEach: number | undefined;
   if (req.addons?.handles && req.addons.handles.count > 0) {
     const h = need(
-      await row<{ price_each: number }>(supabase, "handle_rates", "price_each", { type: req.addons.handles.type }),
+      await row<{ price_each: number }>(supabase, "handle_rates", "price_each", { type: req.addons.handles.type }, ownerId),
       `handle ${req.addons.handles.type}`,
     );
     handleEach = h.price_each;
@@ -850,7 +903,7 @@ export async function loadEstimateRates(
   let lockEach: number | undefined;
   if (req.addons?.locks && req.addons.locks.count > 0) {
     const l = need(
-      await row<{ price_each: number }>(supabase, "lock_rates", "price_each", { type: req.addons.locks.type }),
+      await row<{ price_each: number }>(supabase, "lock_rates", "price_each", { type: req.addons.locks.type }, ownerId),
       `lock ${req.addons.locks.type}`,
     );
     lockEach = l.price_each;
@@ -863,6 +916,7 @@ export async function loadEstimateRates(
         "window_rates",
         "cost_per_sheet, film_width_in, film_height_in",
         { name: req.addons.window.name },
+        ownerId,
       ),
       `window film ${req.addons.window.name}`,
     );
@@ -871,7 +925,7 @@ export async function loadEstimateRates(
 
   // Tape (always — auto per tray/lid component).
   const tape = need(
-    await row<{ rate: number }>(supabase, "consumable_rates", "rate", { name: "tape" }),
+    await row<{ rate: number }>(supabase, "consumable_rates", "rate", { name: "tape" }, ownerId),
     "tape",
   );
 
@@ -884,6 +938,7 @@ export async function loadEstimateRates(
         "labour_rates",
         "rate_per_day, rate_per_hour",
         { name: l.role },
+        ownerId,
       ),
       `labour role ${l.role}`,
     );
@@ -896,13 +951,13 @@ export async function loadEstimateRates(
 
   // Overhead + margin (request override, else config).
   const overheadPct =
-    req.overheadPct ?? need(await configValue(supabase, "app_config", "overhead_pct"), "overhead_pct");
+    req.overheadPct ?? need(await configValue(supabase, "app_config", "overhead_pct", ownerId), "overhead_pct");
   const marginPct =
-    req.marginPct ?? need(await configValue(supabase, "margin_config", "default_margin_pct"), "default_margin_pct");
+    req.marginPct ?? need(await configValue(supabase, "margin_config", "default_margin_pct", ownerId), "default_margin_pct");
 
   // Printing wastage % from app_config (fallback to hardcoded defaults for old DBs without the rows).
-  const printWastagePct = (await configValue(supabase, "app_config", "print_wastage_pct")) ?? 10;
-  const printFoilWastagePct = (await configValue(supabase, "app_config", "print_foil_wastage_pct")) ?? 15;
+  const printWastagePct = (await configValue(supabase, "app_config", "print_wastage_pct", ownerId)) ?? 10;
+  const printFoilWastagePct = (await configValue(supabase, "app_config", "print_foil_wastage_pct", ownerId)) ?? 15;
 
   return {
     board: { costPerSheet: board.cost_per_sheet, sheet: { width_in: board.sheet_width_in, height_in: board.sheet_height_in } },

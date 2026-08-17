@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CostBreakdown } from "@/lib/engines/cost";
-import type { EstimateRequest } from "@/types";
+import type { CurrencyCode, EstimateRequest } from "@/types";
 import { chargeDetail, type ChargeDetail } from "@/lib/estimate/charges";
 import { boxLabel } from "@/lib/box-types";
 import { BRAND } from "@/lib/brand";
@@ -78,6 +78,12 @@ export interface QuotationData {
   terms: string[];
   /** Free-text "Additional Notes" block (round 10; from the client's template). */
   notes?: string;
+  /**
+   * Market this quote is priced in. Absent on every quote saved before
+   * multi-currency, and on every admin/staff quote, which the PDF renders
+   * with the deployment's own BRAND dressing exactly as before.
+   */
+  currency?: CurrencyCode;
   company: typeof COMPANY;
   bank: typeof BANK;
 }
@@ -156,8 +162,21 @@ export function additionalDetails(specs: EstimateRequest): ChargeDetail[] {
 }
 
 /** Exported for scripts/validate-round9.ts (the 5%/18% split is the reason the
- *  included/separate toggle matters at quote stage). */
-export function buildGstLines(boxSubtotal: number, additionalSubtotal: number): GstLine[] {
+ *  included/separate toggle matters at quote stage).
+ *
+ *  GST is INDIA-ONLY. A trial account evaluating from another market gets NO
+ *  tax line at all rather than an Indian one relabelled: their quote is a
+ *  pre-tax figure, which is honest, whereas charging 5% "GST" on a London
+ *  order is not. Proper VAT / US sales tax needs per-line rates, registration
+ *  numbers and a CGST/SGST/IGST-style split — a different shape entirely, and
+ *  still a documented gap (see CLAUDE.md "Known gaps"). `currency` omitted =
+ *  INR = every existing caller, so admin/staff quotes are unchanged. */
+export function buildGstLines(
+  boxSubtotal: number,
+  additionalSubtotal: number,
+  currency: CurrencyCode = "INR",
+): GstLine[] {
+  if (currency !== "INR") return [];
   const lines: GstLine[] = [];
   if (boxSubtotal > 0) {
     lines.push({
@@ -260,15 +279,25 @@ export async function buildMultiQuotationData(
   clientId?: string,
   overrides?: Record<string, QuoteItemOverride>,
   terms?: string[],
+  // Trial-role isolation: pass a user id to build ONLY from that user's own
+  // estimates, so a trial account can't quote another lead's costed work by
+  // posting its id. null/omitted = unrestricted (admin/staff, unchanged).
+  createdBy: string | null = null,
+  // The market this quote is priced in. Omitted = INR = admin/staff, whose
+  // quotes keep the same GST lines and BRAND dressing as before.
+  currency: CurrencyCode = "INR",
 ): Promise<(QuotationData & { clientId: string | null }) | null> {
   if (!estimateIds.length) return null;
 
-  const { data: rows, error } = await supabase
+  const base = supabase
     .from("estimates")
     .select(
       "id, box_type, quantity, specs_snapshot, cost_breakdown, price_per_box, total_price, client_id",
     )
     .in("id", estimateIds);
+  const { data: rows, error } = await (createdBy == null
+    ? base
+    : base.eq("created_by", createdBy));
 
   if (error) throw new Error(error.message);
   if (!rows || rows.length === 0) return null;
@@ -301,7 +330,7 @@ export async function buildMultiQuotationData(
 
   const subTotal = items.reduce((s, it) => s + it.total, 0);
   const additionalSubTotal = items.reduce((s, it) => s + (it.additionalTotal ?? 0), 0);
-  const gstLines = buildGstLines(subTotal, additionalSubTotal);
+  const gstLines = buildGstLines(subTotal, additionalSubTotal, currency);
   const totalGst = gstLines.reduce((s, l) => s + l.amount, 0);
   const grandTotal = subTotal + additionalSubTotal + totalGst;
 
@@ -323,6 +352,7 @@ export async function buildMultiQuotationData(
     gstLines,
     grandTotal,
     terms: cleanTerms.length ? cleanTerms : DEFAULT_TERMS,
+    currency,
     company: COMPANY,
     bank: BANK,
     clientId: resolvedClientId,
@@ -353,6 +383,9 @@ export function finalizeQuoteDraft(
   draft: QuoteDraft,
   preparedBy: string,
   clientId: string | null,
+  // The market this quote is priced in. Omitted = INR = admin/staff, whose
+  // quotes keep the same GST lines and BRAND dressing as before.
+  currency: CurrencyCode = "INR",
 ): QuotationData & { clientId: string | null } {
   const items: QuoteItem[] = draft.items.map((it, idx) => {
     const qty = num(it.qty);
@@ -375,7 +408,7 @@ export function finalizeQuoteDraft(
 
   const subTotal = items.reduce((s, it) => s + it.total, 0);
   const additionalSubTotal = items.reduce((s, it) => s + (it.additionalTotal ?? 0), 0);
-  const gstLines = buildGstLines(subTotal, additionalSubTotal);
+  const gstLines = buildGstLines(subTotal, additionalSubTotal, currency);
   const totalGst = gstLines.reduce((s, l) => s + l.amount, 0);
 
   const issue = new Date();
@@ -401,6 +434,7 @@ export function finalizeQuoteDraft(
     grandTotal: subTotal + additionalSubTotal + totalGst,
     terms: cleanTerms.length ? cleanTerms : DEFAULT_TERMS,
     ...(notes ? { notes } : {}),
+    currency,
     company: COMPANY,
     bank: BANK,
     clientId,
@@ -428,6 +462,17 @@ export async function buildQuotationData(
   supabase: SupabaseClient,
   estimateId: string,
   preparedBy: string,
+  createdBy: string | null = null,
+  currency: CurrencyCode = "INR",
 ): Promise<(QuotationData & { clientId: string | null }) | null> {
-  return buildMultiQuotationData(supabase, [estimateId], preparedBy);
+  return buildMultiQuotationData(
+    supabase,
+    [estimateId],
+    preparedBy,
+    undefined,
+    undefined,
+    undefined,
+    createdBy,
+    currency,
+  );
 }

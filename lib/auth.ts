@@ -4,6 +4,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/db/server";
+import { isCurrencyCode } from "@/lib/currency-meta";
 import type { SessionInfo, UserRole } from "@/types";
 
 /**
@@ -38,7 +39,7 @@ export const getSession = cache(async (): Promise<SessionInfo | null> => {
   // RLS lets an authenticated user read only their own profile row.
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role, full_name")
+    .select("role, full_name, trial_rates_ack, trial_currency")
     .eq("id", user.id)
     .single();
 
@@ -47,6 +48,10 @@ export const getSession = cache(async (): Promise<SessionInfo | null> => {
     role: (profile?.role as UserRole | undefined) ?? null,
     fullName: profile?.full_name ?? null,
     email: user.email ?? null,
+    trialRatesAck: profile?.trial_rates_ack ?? false,
+    // Validated rather than cast: a value outside the four known codes would
+    // otherwise reach CURRENCY_META and index to undefined at render time.
+    trialCurrency: isCurrencyCode(profile?.trial_currency) ? profile.trial_currency : null,
   };
 });
 
@@ -67,4 +72,18 @@ export const verifySession = cache(async (): Promise<SessionInfo> => {
 export async function requireAdmin(): Promise<SessionInfo | null> {
   const session = await verifySession();
   return session.role === "admin" ? session : null;
+}
+
+/**
+ * The data scope for a session: null = unrestricted (admin/staff — the
+ * shared master rate card and every client/estimate/quote, exactly as
+ * before); a trial user's own id = ONLY their own rows.
+ *
+ * Used for both `owner_id` (their private rate-card clone) and `created_by`
+ * (their own clients/estimates/quotes) — the same id scopes both. Single
+ * source of truth: every scoped read and write derives it from the session
+ * here, never from a client-sent value.
+ */
+export function ownerScopeFor(session: Pick<SessionInfo, "role" | "userId">): string | null {
+  return session.role === "trial" ? session.userId : null;
 }

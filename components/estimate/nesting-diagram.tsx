@@ -40,7 +40,7 @@ function creaseLines(
   across: number,
   down: number,
   scale: number,
-  colour = "#1F2A5C",
+  colour = "#33261C",
 ): React.ReactNode[] {
   if (!creases || bW < 12 || bH < 12) return [];
   const lines: React.ReactNode[] = [];
@@ -99,7 +99,8 @@ interface SheetDiagramProps {
   creases?: Creases | null; // keyline fold lines for this blank (oriented)
   /**
    * Mixed-orientation layout (round 5): when present, the explicit rect list
-   * replaces the uniform grid — rotated pieces draw in gold, exactly like
+   * replaces the uniform grid — rotated pieces draw in clay,
+   * exactly like
    * PrintPurchaseDiagram. `chosen` = the main grid's orientation, so rects
    * whose orientation differs are the recovered strip pieces.
    */
@@ -135,7 +136,7 @@ function SheetDiagram({
   let rotatedCount = 0;
   if (layout) {
     // Mixed-orientation layout (round 5): draw the engine's actual rects;
-    // rotated strip pieces read in solid gold like PrintPurchaseDiagram.
+    // rotated strip pieces read in solid clay like PrintPurchaseDiagram.
     layout.forEach((r, i) => {
       const rotated = chosen != null && r.orientation !== chosen;
       if (rotated) rotatedCount++;
@@ -146,9 +147,9 @@ function SheetDiagram({
           y={MT + r.y_in * scale}
           width={r.w_in * scale}
           height={r.h_in * scale}
-          fill="#C6A24C"
+          fill="#B4552D"
           fillOpacity={rotated ? 0.5 : 0.22}
-          stroke="#C6A24C"
+          stroke="#B4552D"
           strokeWidth={0.7}
         />,
       );
@@ -163,9 +164,9 @@ function SheetDiagram({
             y={MT + r * bH}
             width={bW}
             height={bH}
-            fill="#C6A24C"
+            fill="#B4552D"
             fillOpacity={0.22}
-            stroke="#C6A24C"
+            stroke="#B4552D"
             strokeWidth={0.7}
           />,
         );
@@ -205,7 +206,7 @@ function SheetDiagram({
           width={sW}
           height={sH}
           fill="white"
-          stroke="#1F2A5C"
+          stroke="#33261C"
           strokeWidth={1.5}
         />
 
@@ -247,7 +248,7 @@ function SheetDiagram({
             textAnchor="middle"
             dominantBaseline="middle"
             fontSize={cellFs}
-            fill="#1F2A5C"
+            fill="#33261C"
             opacity={0.85}
           >
             {fmt(blankW)}w&times;{fmt(blankH)}h
@@ -298,7 +299,7 @@ export function MaterialNestingSection({
             perSheet={c.perSheet}
             sheetsNeeded={c.sheetsNeeded}
             creases={creasesForBlank(panels, bW, bH)}
-            // Mixed-orientation layout (round 5): rotated pieces draw in gold.
+            // Mixed-orientation layout (round 5): rotated pieces draw in clay.
             layout={c.mixed?.layout}
             chosen={c.chosen}
           />
@@ -308,9 +309,12 @@ export function MaterialNestingSection({
   );
 }
 
-// Distinct colours per component in a combined layout (navy / gold / green /
+// Distinct hues per component in a combined layout (espresso / clay / olive /
 // sienna, cycled). Kept brand-adjacent to the single-colour SheetDiagram.
-const COMBO_PALETTE = ["#1F2A5C", "#C6A24C", "#4F7942", "#A0522D"];
+// Warm palette: espresso, clay, olive-brown, muted rust. Four distinct hues
+// rather than four greys — components in a combined layout have to be told
+// apart at a glance, which lightness alone does poorly.
+const COMBO_PALETTE = ["#33261C", "#B4552D", "#7D6A3F", "#9C4F4F"];
 
 /**
  * Draws the ACTUAL combined cutting plan for one group: different components
@@ -375,7 +379,7 @@ export function CombinedSheetDiagram({
         className="w-full max-h-[180px] rounded border bg-slate-50"
         aria-label={`Combined nesting layout: ${label}`}
       >
-        <rect x={ML} y={MT} width={sW} height={sH} fill="white" stroke="#1F2A5C" strokeWidth={1.5} />
+        <rect x={ML} y={MT} width={sW} height={sH} fill="white" stroke="#33261C" strokeWidth={1.5} />
         {rects.map((r, i) => (
           <rect
             key={i}
@@ -617,7 +621,8 @@ export function FoamNestingSection({
  * Print-on-paper purchase layout (client 7-Jul: "what is the size of each print
  * axis-wise" + "1 more print fits in the wasted space if we flip to landscape").
  * Draws one stock paper sheet with the prints packed on it — main-orientation
- * prints in navy, the rotated extras recovered from the leftover strip in gold —
+ * prints in espresso, the rotated extras recovered from the leftover strip in
+ * clay —
  * plus a summary line with the per-print size and sheets bought.
  */
 export function PrintPurchaseDiagram({
@@ -650,10 +655,10 @@ export function PrintPurchaseDiagram({
         className="w-full max-h-[180px] rounded border bg-slate-50"
         aria-label={`Print-on-paper layout: ${label}`}
       >
-        <rect x={ML} y={MT} width={sW} height={sH} fill="white" stroke="#1F2A5C" strokeWidth={1.5} />
+        <rect x={ML} y={MT} width={sW} height={sH} fill="white" stroke="#33261C" strokeWidth={1.5} />
         {purchase.layout.map((r, i) => {
           const rotated = r.orientation !== purchase.chosen;
-          const colour = rotated ? "#C6A24C" : "#1F2A5C";
+          const colour = rotated ? "#B4552D" : "#33261C";
           return (
             <rect
               key={i}

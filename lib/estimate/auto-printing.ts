@@ -36,16 +36,22 @@ async function loadPrintCandidates(
   supabase: SupabaseClient,
   type: "offset" | "digital",
   colour: "multi" | "single",
+  ownerId: string | null,
   vendor?: string,
 ): Promise<PrintCandidate[]> {
   // Round 10: with a vendor chosen, Auto compares only that vendor's sizes.
   // With none, it compares EVERY row — including several vendors' — so the
   // pick genuinely weighs plate cost against paper cost across printers.
+  // Owner-scoped (trial-role isolation) the same way lib/db/rates.ts's
+  // row()/printRow() are: null = shared master card, a user id = that
+  // trial user's own clone.
   if (type === "digital") {
-    const q = supabase
+    let q = supabase
       .from("digital_printing_rates")
       .select("size_label, cost_per_sheet, width_in, height_in, vendor");
-    const { data, error } = await (vendor ? q.eq("vendor", vendor) : q);
+    q = vendor ? q.eq("vendor", vendor) : q;
+    q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
+    const { data, error } = await q;
     if (error) throw new EstimateError(`Could not load digital printing sizes: ${error.message}`);
     return (data ?? []).map((r) => ({
       sizeLabel: r.size_label,
@@ -58,11 +64,15 @@ async function loadPrintCandidates(
   // Offset: filter by colour; a pre-migration-offset-colour DB has no such
   // column (the filter errors) — retry unfiltered, exactly like rate-options.
   const cols = "size_label, first_1000, additional_1000, width_in, height_in, vendor";
-  const q1 = supabase.from("offset_printing_rates").select(cols).eq("colour", colour);
-  let res = await (vendor ? q1.eq("vendor", vendor) : q1);
+  let q1 = supabase.from("offset_printing_rates").select(cols).eq("colour", colour);
+  q1 = vendor ? q1.eq("vendor", vendor) : q1;
+  q1 = ownerId == null ? q1.is("owner_id", null) : q1.eq("owner_id", ownerId);
+  let res = await q1;
   if (res.error) {
-    const q2 = supabase.from("offset_printing_rates").select(cols);
-    res = await (vendor ? q2.eq("vendor", vendor) : q2);
+    let q2 = supabase.from("offset_printing_rates").select(cols);
+    q2 = vendor ? q2.eq("vendor", vendor) : q2;
+    q2 = ownerId == null ? q2.is("owner_id", null) : q2.eq("owner_id", ownerId);
+    res = await q2;
   }
   if (res.error) throw new EstimateError(`Could not load offset printing sizes: ${res.error.message}`);
   return (res.data ?? []).map((r) => ({
@@ -80,11 +90,11 @@ async function loadPrintCandidates(
 async function loadPaperCandidates(
   supabase: SupabaseClient,
   gsm: number,
+  ownerId: string | null,
 ): Promise<PaperCandidate[]> {
-  const { data, error } = await supabase
-    .from("paper_rates")
-    .select("size_label, cost_per_sheet, width_in, height_in")
-    .eq("gsm", gsm);
+  let q = supabase.from("paper_rates").select("size_label, cost_per_sheet, width_in, height_in").eq("gsm", gsm);
+  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
+  const { data, error } = await q;
   if (error) throw new EstimateError(`Could not load paper sizes: ${error.message}`);
   return (data ?? []).map((r) => ({
     sizeLabel: r.size_label,
@@ -104,6 +114,7 @@ async function loadPaperCandidates(
 export async function resolveAutoPrinting(
   supabase: SupabaseClient,
   req: EstimateRequest,
+  ownerId: string | null,
 ): Promise<{ req: EstimateRequest; autoPicks: AutoPick[] }> {
   const outerSel = req.wrapping?.outer;
   const innerSel = req.wrapping?.inner;
@@ -117,9 +128,9 @@ export async function resolveAutoPrinting(
 
   // Same config reads (and defaults) as loadEstimateRates.
   const [printPct, foilPct, configFolding] = await Promise.all([
-    configValue(supabase, "app_config", "print_wastage_pct"),
-    configValue(supabase, "app_config", "print_foil_wastage_pct"),
-    configValue(supabase, "app_config", "folding_allowance_mm"),
+    configValue(supabase, "app_config", "print_wastage_pct", ownerId),
+    configValue(supabase, "app_config", "print_foil_wastage_pct", ownerId),
+    configValue(supabase, "app_config", "folding_allowance_mm", ownerId),
   ]);
   const printWastage = printPct ?? 10;
   const foilWastage = foilPct ?? 15;
@@ -152,9 +163,10 @@ export async function resolveAutoPrinting(
         supabase,
         outerSel.printing.type,
         outerSel.printing.colour ?? "multi",
+        ownerId,
         outerSel.printing.vendor,
       ),
-      loadPaperCandidates(supabase, outerSel.gsm),
+      loadPaperCandidates(supabase, outerSel.gsm, ownerId),
     ]);
     const win = chooseBestPrinting({
       blanks,
@@ -199,9 +211,10 @@ export async function resolveAutoPrinting(
         supabase,
         innerSel.printing.type,
         innerSel.printing.colour ?? "multi",
+        ownerId,
         innerSel.printing.vendor,
       ),
-      loadPaperCandidates(supabase, innerSel.gsm),
+      loadPaperCandidates(supabase, innerSel.gsm, ownerId),
     ]);
     const win = chooseBestPrinting({
       blanks: liningBlanks,

@@ -12,7 +12,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadEstimateDetail } from "@/lib/db/estimates";
 import { recomputeMaterials } from "@/lib/estimate/build-estimate";
@@ -97,7 +97,7 @@ export async function GET(
 
   try {
     const admin = createAdminClient();
-    const est = await loadEstimateDetail(admin, id);
+    const est = await loadEstimateDetail(admin, id, ownerScopeFor(session));
     if (!est) {
       return Response.json({ error: "Estimate not found." }, { status: 404 });
     }

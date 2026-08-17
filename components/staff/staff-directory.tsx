@@ -33,14 +33,15 @@ const dateFmt = new Intl.DateTimeFormat("en-IN", {
 });
 
 function RoleBadge({ role }: { role: string | null }) {
-  const isAdmin = role === "admin";
   return (
     <Badge
       className={cn(
         "uppercase tracking-wide",
-        isAdmin
-          ? "bg-gold/15 text-amber-800 dark:bg-gold/20 dark:text-gold"
-          : "bg-secondary text-secondary-foreground",
+        role === "admin"
+          ? "bg-clay/15 text-clay dark:bg-clay/20" // admin: the accent chip marks the most privileged role
+          : role === "trial"
+            ? "bg-primary/10 text-primary dark:bg-primary/20"
+            : "bg-secondary text-secondary-foreground",
       )}
     >
       {role ?? "no role"}
@@ -52,6 +53,10 @@ type EditState = {
   id: string;
   fullName: string;
   role: string;
+  /** The role this account ALREADY has — `role` is the in-progress choice.
+   *  Keeping both apart is what lets the dialog explain a trial conversion
+   *  without mistaking "you just picked Trial" for "this IS a trial". */
+  originalRole: string;
   password: string;
 };
 
@@ -84,6 +89,7 @@ export function StaffDirectory({
       id: u.id,
       fullName: u.fullName ?? "",
       role: u.role ?? "staff",
+      originalRole: u.role ?? "staff",
       password: "",
     });
   }
@@ -120,13 +126,14 @@ export function StaffDirectory({
 
   async function deleteUser(u: StaffUser) {
     const label = u.fullName ?? u.email ?? "this user";
+    // A trial account's clients/estimates/quotes and private rate card are
+    // deleted WITH it (server-side) — say so, since it's not reversible.
+    const message =
+      u.role === "trial"
+        ? `Delete ${label}'s trial account? Their clients, estimates, quotes and private rate card are all deleted too. This cannot be undone.`
+        : `Delete ${label}'s login? They will no longer be able to sign in. Their saved estimates stay.`;
     // eslint-disable-next-line no-alert
-    if (
-      !window.confirm(
-        `Delete ${label}'s login? They will no longer be able to sign in. Their saved estimates stay.`,
-      )
-    )
-      return;
+    if (!window.confirm(message)) return;
     setBusy(true);
     setListError(null);
     try {
@@ -268,12 +275,28 @@ export function StaffDirectory({
                 >
                   <option value="staff">Staff</option>
                   <option value="admin">Admin</option>
+                  <option value="trial">Trial (external lead)</option>
                 </NativeSelect>
-                {editing.id === currentUserId && (
+                {/* Compare against originalRole, never the in-progress pick —
+                    otherwise choosing "Trial" instantly claims the account is
+                    already one. */}
+                {editing.id === currentUserId ? (
                   <p className="text-xs text-muted-foreground">
                     You cannot change your own role.
                   </p>
-                )}
+                ) : editing.originalRole !== "trial" && editing.role === "trial" ? (
+                  <p className="text-xs text-muted-foreground">
+                    Saving gives them their own private copy of the rate card.
+                    They&apos;ll only see clients, estimates and quotes they
+                    created themselves.
+                  </p>
+                ) : editing.originalRole === "trial" && editing.role !== "trial" ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-500">
+                    Saving deletes their private rate card, and the clients,
+                    estimates and quotes they made become visible to all staff
+                    and admins.
+                  </p>
+                ) : null}
               </div>
               <div className="grid gap-1">
                 <Label htmlFor="edit-staff-password">New password</Label>

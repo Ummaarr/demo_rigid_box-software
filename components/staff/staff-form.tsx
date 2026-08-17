@@ -100,7 +100,15 @@ export function StaffForm({ onSuccess }: { onSuccess?: () => void }) {
           >
             <option value="staff">Staff</option>
             <option value="admin">Admin</option>
+            <option value="trial">Trial (external lead)</option>
           </NativeSelect>
+          {role === "trial" && (
+            <p className="text-xs text-muted-foreground">
+              Gets a private copy of the rate card and sees only their own
+              clients, estimates and quotes. Deleting the account removes all
+              of it.
+            </p>
+          )}
         </div>
       </div>
 

@@ -49,10 +49,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { RecentEstimate } from "@/lib/db/dashboard";
 import type { UserRole } from "@/types";
-import { formatMoney } from "@/lib/currency";
+import { useMoneyFormatter } from "@/lib/currency-context";
 
-const inr = { format: (n: number) => formatMoney(n, 0) };
-const inr2 = { format: (n: number) => formatMoney(n, 2) };
 
 // Soft-tinted status pills (label + icon + colour), one per estimate status.
 const STATUS_META: Record<
@@ -104,8 +102,11 @@ export function RecentEstimatesTable({
   recent: RecentEstimate[];
   role: UserRole | null;
 }) {
+  const money = useMoneyFormatter();
+  const inr = { format: (n: number) => money(n, 0) };
+  const inr2 = { format: (n: number) => money(n, 2) };
   const router = useRouter();
-  const isAdmin = role === "admin";
+  const canDelete = role === "admin" || role === "trial";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
@@ -275,7 +276,7 @@ export function RecentEstimatesTable({
                             <ReceiptText />
                             Create quote
                           </DropdownMenuItem>
-                          {isAdmin && (
+                          {canDelete && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem

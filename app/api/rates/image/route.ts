@@ -1,13 +1,35 @@
 // /api/rates/image
-//   POST (admin) — upload/replace a rate-card reference photo for an add-on row.
+//   POST (admin, or trial for their own row) — upload/replace a rate-card
+//                  reference photo for an add-on row.
 //                  multipart/form-data: table, id, image (file).
-//   GET  (auth)  — stream the stored photo for ?table=&id=. We proxy the bytes
-//                  through the service role so the browser never talks to
-//                  Supabase Storage directly (CLAUDE.md architecture rule).
+//   GET  (auth, row-owner-scoped) — stream the stored photo for ?table=&id=.
+//                  We proxy the bytes through the service role so the browser
+//                  never talks to Supabase Storage directly (CLAUDE.md
+//                  architecture rule).
 // Only the add-on rate tables (numeric id PK) carry an image_path column.
+// Every one of them carries owner_id (trial-role isolation) — a caller may
+// only touch a row they own: admin/staff -> owner_id null (shared master),
+// trial -> their own id. "Not found" on a mismatch, not "Forbidden".
 
 import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SessionInfo } from "@/types";
+
+async function ownsRow(
+  admin: SupabaseClient,
+  table: string,
+  id: number,
+  session: SessionInfo,
+): Promise<boolean> {
+  const { data, error } = await admin.from(table).select("owner_id").eq("id", id).maybeSingle();
+  if (error || !data) return false;
+  const ownerId = (data as { owner_id: string | null }).owner_id;
+  return (
+    ((session.role === "admin" || session.role === "staff") && ownerId === null) ||
+    (session.role === "trial" && ownerId === session.userId)
+  );
+}
 
 export const runtime = "nodejs";
 
@@ -31,7 +53,7 @@ export async function POST(request: Request) {
   const session = await getSession();
   if (!session)
     return Response.json({ error: "Not authenticated." }, { status: 401 });
-  if (session.role !== "admin")
+  if (session.role !== "admin" && session.role !== "trial")
     return Response.json({ error: "Admin only." }, { status: 403 });
 
   let form: FormData;
@@ -58,8 +80,11 @@ export async function POST(request: Request) {
   if (file.size <= 0 || file.size > MAX_BYTES)
     return Response.json({ error: "Image must be between 1 byte and 2 MB." }, { status: 400 });
 
-  const path = `${table}/${id}.${ext}`;
   const admin = createAdminClient();
+  if (!(await ownsRow(admin, table, Number(id), session)))
+    return Response.json({ error: "Not found." }, { status: 404 });
+
+  const path = `${table}/${id}.${ext}`;
 
   const up = await admin.storage.from(BUCKET).upload(path, file, {
     contentType: file.type,
@@ -100,6 +125,9 @@ export async function GET(request: Request) {
     return Response.json({ error: "Invalid id." }, { status: 400 });
 
   const admin = createAdminClient();
+  if (!(await ownsRow(admin, table, Number(id), session)))
+    return new Response("No image", { status: 404 });
+
   const { data: row, error: rowErr } = await admin
     .from(table)
     .select("image_path")

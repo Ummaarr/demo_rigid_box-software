@@ -12,15 +12,6 @@ inserts) and produces: raw-material quantities with nesting layouts, an itemised
 cost breakdown, a keyline diagram, a cost-free raw-material sheet for the floor,
 and a branded quotation PDF.
 
-## Tech Stack
-- Framework: Next.js (React) with TypeScript
-- Database: Supabase (PostgreSQL)
-- Auth: Supabase Auth
-- UI components: shadcn/ui (install components as needed, not all at once)
-- PDF: React-PDF
-- Hosting: Vercel
-- Styling: Tailwind CSS
-
 ## Critical Architecture Rule
 ALL Supabase calls must go through Next.js API routes (`/app/api/`).
 Never call Supabase directly from the browser/client components.
@@ -58,8 +49,12 @@ regions, which is why `proxy.ts` exists.
   `seed.sql`), checked into the repo. They are the source of truth — never
   hand-type schema only in the dashboard.
 - Standing up a new instance: create a Supabase project → run `schema.sql` +
-  `seed.sql` → create the first admin user (see the bootstrap comment at the end
-  of `schema.sql`) → set the 3 env vars → deploy. No code changes.
+  `seed.sql` + `seed-currency-templates.sql` → create the first admin user (see
+  the bootstrap comment at the end of `schema.sql`) → set the 3 env vars →
+  deploy. No code changes. (`seed.sql` seeds the INR master card;
+  `seed-currency-templates.sql` adds the USD/GBP/AED template sets a trial
+  account can be provisioned from. Skip it and those three picker options
+  produce an empty rate card.)
 - All Supabase config is via env vars only (`NEXT_PUBLIC_SUPABASE_URL`,
   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`).
 - `schema.sql` is idempotent and complete. The `migration-*.sql` files are
@@ -78,11 +73,97 @@ regions, which is why `proxy.ts` exists.
   the pending count). Approving applies the change through the same validated
   path as a direct edit (`lib/db/rate-whitelist.ts` `applyRateUpdate`, shared
   with PATCH `/api/rates`).
+- **Trial**: a short-lived EXTERNAL lead evaluating the app (see "Trial
+  accounts" below). Isolated to its own data + its own private rate card.
 - Enforce permissions on BOTH frontend (hide UI) and backend (API route checks).
 - There is no public signup. Admins provision users at `/staff`, which creates
   the auth user with `email_confirm: true` and inserts the `profiles` row,
   rolling back the auth user if the profile insert fails. Password reset is an
   admin action, not a user-initiated email flow.
+
+### Trial accounts (external leads, one shared deployment)
+Added so a handful of prospective manufacturers can evaluate the engine on
+ONE deployment without seeing each other. Deliberately NOT a general
+multi-tenant system — no org/tenant table, just row ownership.
+
+- **Scoping.** `ownerScopeFor(session)` (`lib/auth.ts`) is the single source of
+  truth: `null` for admin/staff (unrestricted, byte-identical to before), the
+  user's own id for trial. It scopes BOTH `owner_id` (their private rate-card
+  clone) and `created_by` (their clients/estimates/quotes/dashboard). Never
+  derive it from a client-sent value.
+- **Private rate card.** Every rate table + `margin_config` has a nullable
+  `owner_id`: NULL = the shared master card, a uuid = one trial user's clone,
+  copied at account creation by `cloneRateCardForUser`
+  (`lib/db/clone-rate-card.ts`). `app_config` is NOT cloned — global formula
+  config, admin-only.
+- **FOUR rate-read call sites must all be owner-aware** or the card silently
+  half-applies: `lib/db/rates.ts` (`row`/`printRow`), `lib/estimate/
+  auto-printing.ts`, `lib/db/rate-admin.ts`, `lib/db/rate-options.ts`. Miss the
+  last one and the estimate FORM offers the master card's sizes while costing
+  resolves the clone's.
+- **Writes** go through `applyRateUpdate`, which checks row ownership: admin
+  may only touch `owner_id is null`, trial only its own. Trial edits DIRECTLY
+  (no propose/approve — that gate exists to protect the SHARED card from staff
+  edits; nothing else reads a trial's clone). POST `/api/rates` stamps
+  `owner_id` server-side.
+- **Margin is visible to trial** (their own markup on their own private
+  estimate, from their own cloned `margin_config` row) — `costForRole`, both
+  estimate routes' override stripping, and the form input all treat
+  admin+trial alike. Staff still never see it.
+- **Deleting a trial user deletes their work** (quotes → estimates → clients,
+  in `DELETE /api/staff/[id]`, before `deleteUser`; the rate clone cascades via
+  the `owner_id` FK). Staff/admin deletion is UNCHANGED — their rows are real
+  company history and stay with a nulled `created_by`.
+- A trial account's ROLE CANNOT BE CHANGED (API + UI both refuse): converting
+  either way would need the private rate card and data cloned or re-homed.
+  Delete and re-create instead.
+- **First-login banner** (`components/trial-rate-banner.tsx`) prompts them to
+  review rates; dismissal is EXPLICIT (`profiles.trial_rates_ack`, POST
+  `/api/trial/ack-rates`), not "clears on first edit" — a lead may keep the
+  seeded values and would otherwise be nagged forever.
+- **Market / currency (v8).** A trial picks their country on FIRST LOGIN and
+  their whole card is priced for that market — real per-market figures, not an
+  FX conversion or a symbol swap. `profiles.trial_currency` (null = not yet
+  picked) drives it; `app/(app)/layout.tsx` renders a BLOCKING
+  `TrialCurrencyPicker` instead of the shell while it is null, because until
+  then the account has NO rate card at all. Cloning therefore does NOT happen
+  at account creation any more — `POST /api/trial/set-currency` is what calls
+  `cloneRateCardForUser(admin, uid, currency)`, and both `POST /api/staff` and
+  the ->trial branch of `PATCH /api/staff/[id]` deliberately skip it. The
+  choice is one-way (delete and re-create to change market), same rule as role.
+  Every SHARED rate row carries `currency`, so the master card is four template
+  sets; `margin_config`/`app_config` do NOT (percentages and formula constants
+  are market-independent). `POST /api/rates` stamps `currency` server-side
+  beside `owner_id` — miss it and a trial's added row lands in the INR card,
+  invisible to their own estimates.
+- **Currency display.** `formatMoney(n, decimals, fmt?)` takes an optional
+  per-market override; omitted = the deployment's BRAND dressing, so
+  admin/staff render byte-identically to before v8. Client components read it
+  from `CurrencyProvider` via `useMoneyFormatter()` / `useCurrencyCode()`
+  (seeded once server-side in the app layout); server components call
+  `currencyMetaFor(session)` directly. `loadAllRates` takes the symbol for its
+  unit labels; `buildCostView` takes the format for its inline rate strings.
+- **GST is gated on currency.** `buildGstLines(box, addl, currency)` returns []
+  for anything but INR, so a UK/US/UAE trial's quote carries no tax line rather
+  than a fabricated Indian one. `components/quotes/quote-preview.tsx` mirrors
+  that gate (it is display-only; the server figure is authoritative). Real VAT
+  / sales tax remains an open gap — see "Known gaps".
+- **Quotes snapshot their currency** (`quotes.currency`, null = pre-v8 or
+  admin/staff) so re-rendering a saved PDF prints what it was issued in, not
+  the re-generator's market.
+- **SQL TRAP:** the natural-key `unique` constraints on the rate tables are now
+  PAIRS OF PARTIAL INDEXES (`where owner_id is null` / `... is not null`), the
+  same pattern `vendor` already used, because a plain composite unique would
+  let two MASTER rows share a key (`NULL <> NULL`). Consequences: every
+  `on conflict` in `seed.sql` must restate `where owner_id is null`, and the
+  pre-v7 blocks in `schema.sql` that re-add the old bare keys are guarded on
+  `owner_id` not existing — without that guard, re-running `schema.sql` on a DB
+  with trial clones aborts.
+  v8 EXTENDS this: `currency` is now the FIRST column of every `_key_shared`
+  index (the `owner_id is null` half only — a user holds one currency, so the
+  `_key_owned` half is untouched), which is why every `on conflict` in both
+  seed files leads with `currency`. `app_config`/`margin_config` keep their
+  original targets.
 
 ## Units
 All dimensions are in INCHES. This is the storage contract, not a display
@@ -137,290 +218,28 @@ wrong numbers**, so they are the dangerous ones:
     `VAR_BASE_LABELS`; plus any new field on `BoxVariables` in `types/index.ts`.
 
 ## Blank Dimension Formulas
-All dimensions in inches. L = length, W = width, H = height (internal dims).
-Each box type lists its own variables (the inputs its formula needs).
-
-- **Telescopic**: tray (H+L+H) x (H+W+H); lid (Depth+L+Depth) x (Depth+W+Depth)
-    Variables: Lid depth (default 1.5 in)
-- **Magnetic**: tray (H+L+H) x (H+W+H);
-    Regular (4-panel) case (Flap+W+H+W) x L; 3-panel case (Flap+W+H) x L;
-    5-panel case (Flap+W+H+W+FlapHeight) x L
-    Variables: Flap length, number of panels (3/4/5), Flap height (5-panel only),
-    closure (magnet/ribbon)
-- **Shoulder**: tray (BH+L+BH) x (BH+W+BH); neck (NH+L+NH) x (NH+W+NH);
-    lid (Depth+L+Depth) x (Depth+W+Depth)
-    Variables: Lid depth, Neck height (NH), Bottom height (BH)
-- **Drawer sliding**: tray (H+L+H) x (H+W+H); sleeve (W+H) x (L+H+L+H)
-    Variables: Sleeve material (kappa board / duplex board / CyberXL / custom)
-- **Match-box sliding**: tray (H+L+H) x (H+W+H); sleeve (W+H+W+H) x L
-    Variables: Sleeve material
-- **Hinge lid**: tray (BH+L+BH) x (BH+W+BH); neck (NH+L+NH) x (NH+W+NH);
-    lid (Depth+L+Depth) x (Depth+W+Depth)
-    ("base" = "tray", used interchangeably, so the tray component auto-includes
-    tape. "inner box" = the neck formula.)
-    Variables: Bottom height, Neck height, Lid depth, ribbon support
-- **Collapsible rigid**: case (Flap+W+H+W+H) x L;
-    2 tray pieces, each (H+W+H) x (H+H)
-    Variables: adhesive tape (with/without), closure (magnet/ribbon)
-- **Double decker**: case (Flap+W+[H1+H2]+W) x L;
-    tray 1 (H1+L+H1) x (H1+W+H1); tray 2 (H2+L+H2) x (H2+W+H2);
-    drawer sleeve (W+H1) x (L+H+L+H1)
-    Variables: Flap length, number of panels, H1 (tray 1 height), H2 (tray 2)
-
-### Lid / sleeve fit allowance
-A lid's inner dimension must clear the base's outer dimension. `vars.fitAllowance_in`
-is derived by `lib/formulas/fit.ts`: **2t + 1mm as the TOTAL added to EACH of L
-and W** (note the units contract — formulas read `L + f`, never `L + 2*f`).
-
-`FIT_ALLOWANCE_TYPES` covers telescopic, shoulder, drawer_sliding and
-matchbox_sliding. Substitutions: telescopic + shoulder lid `(D+(L+f)+D) x
-(D+(W+f)+D)`; shoulder tray likewise; drawer sleeve `((W+f)+H) x ((L+f)+H+(L+f)+H)`.
-The neck is untouched.
-
-INJECTION: `buildEstimate` rebuilds the request (validate → inject → applySections
-→ snapshot) so `specs_snapshot` CARRIES the var. `recomputeMaterials` /
-`buildMaterialInput` NEVER derive it, so old snapshots without the var compute
-byte-identically. The four keyline components apply the same substitutions —
-`creasesForBlank` matches panels to blanks by dimension, so skipping one silently
-drops its fold lines. Wrap paper grows automatically since it derives from board
-blanks. The sleeve INSERT gets no allowance (free dims).
+Blank formulas per box type, and the lid/sleeve fit allowance, are in `lib/formulas/CLAUDE.md`.
 
 ## Engine Structure
-**Engine 1 — Raw Material Estimator** (`/lib/engines/material.ts`)
-  Input: box specs (L, W, H, variables, qty, board thickness, paper GSM etc.)
-  Output: quantities (board sheets, paper sheets, foam sheets, accessories)
-  1. Calculate blank dimensions per component using the box type formula
-  2. Run orientation comparison (A vs B) for each material
-  3. Select the better orientation (or use the user override)
-  4. Calculate sheets needed per material
-  5. Return full material quantities
-
-**Engine 2 — Cost Estimator** (`/lib/engines/cost.ts`)
-  Input: material quantities from Engine 1 + rates from DB
-  Output: itemised cost breakdown
-  - Step 1 — Raw materials (level-1): board; wrapping paper; lining paper;
-    printing (offset tiered OR digital OR special paper — no print); finishing
-    (lamination/foil/UV/relief x area formula); inserts (foam / reverse board +
-    top paper / card / ribbon tag); accessories (magnets, washers); fixed RM
-    costs (tape computed; glue + metlock manual open inputs)
-  - Step 2 — Labour (level-1): sum of lines, each role x (per-hour OR per-day
-    rate) x quantity. Multiple lines per estimate.
-  - Step 3 — Overhead: +% of level-1 (raw materials + labour). Editable.
-  - Step 4 — Margin: +% of level-2 (RM + labour + overhead). Editable input.
-  - Step 5 — Additional costs (manual, added AFTER margin, no margin on them):
-    one-time charges, block charges (auto-prompt when foiling/emboss/deboss
-    selected), designer charges.
-  - Final: price per box and total (pre-GST; GST applied at quotation stage).
-
-### Partial / sectional estimates
-`sections` on the request (`{board, wrapping, inserts}`, missing = all on) plus an
-"Estimate covers" checkbox strip on the form. Excluded wrapping/inserts
-selections are dropped SERVER-SIDE (`applySections` in `build-estimate.ts` — the
-API is authoritative). Board off = board still NESTED (paper blanks need the
-keyline) but board cost, auto tape and ribbon-tag are not charged. At least one
-section is required (400 otherwise). The snapshot stores the RAW request so
-re-editing restores everything.
-
-### Ordered vs production quantity
-`EstimateRequest.quantity` is what was ORDERED. `productionQuantity?` is the
-optional larger wastage run. `productionQuantity(req)` (in `auto-printing-core`,
-pure — `build-estimate` and the auto evaluator must agree) resolves it, falling
-back to the order when absent or smaller. Engine 1 nests the production run;
-Engine 2 divides by `CostRates.orderedQuantity` for `pricePerBox`.
-`estimates.quantity` stores the ORDER.
+Engine 1 / Engine 2 internals, partial estimates and ordered-vs-production quantity are in `lib/engines/CLAUDE.md`.
 
 ## Nesting
-**Board nesting — combination layouts.** The real process checks combinations
-across components on one sheet to cut waste, not just each component on its own
-sheets. Implemented as guillotine combination nesting (`computeCombination` in
-`lib/engines/material.ts`): it evaluates every split of components into
-cut-together groups and cut-alone singles (set partitions); each group is packed
-via both guillotine directions (horizontal shelves / vertical strips) x every
-per-component orientation to maximise complete boxes per sheet. The all-separate
-plan is always a candidate, so the result is GUARANTEED never worse than the
-per-component baseline. `MaterialEstimate.combination` carries the result;
-`totalSheets` already reflects it.
-
-EXTENDED to outer wrap and inner lining paper: within ONE wrap layer every
-component's blank already shares the same paper stock/GSM/print job, so
-`estimatePaperMaterial` takes the same `combine` flag as board. Combination is
-NEVER applied ACROSS layers (outer vs inner vs foam-cover), since those carry
-independent paper stock, GSM and print settings. Foam-cover combination is
-explicitly NOT done — each insert's cover is configured independently.
-
-Printing wastage (+10%/+15%) is applied AFTER the combination search picks a
-plan, inflating each shared group's sheet count once (not once per member) — see
-`applyWastage` for the rounding proof that never-worse still holds.
-
-LIMITATION: shelves are a conservative model of true 2D nesting — a planner may
-still beat it by pocketing a small part in a big part's leftover corner. True
-non-guillotine pocketing is out of scope (factory cutters cut straight lines).
-
-**Mixed-orientation nesting.** `packPiecesOnSheet` also upgrades per-component
-nesting: main grid + rotated pieces in the leftover strips, used only when
-STRICTLY better than both pure grids. GATED on `EstimateRequest.nestingVersion >= 2`
-(the form always sends 2; absent = pure grids, byte-identical for old snapshots).
-A user orientation override always forces the pure grid.
-`BlankMaterialResult.mixed?` carries `{perSheet, layout}`. Applies to board, wrap
-layers, reverse board and card-stock inserts; foam pieces/covers and window film
-keep pure grids.
-
-**Orientation comparison.** For every material and component, calculate both:
-  A: floor(sheet_W / blank_W) x floor(sheet_H / blank_H)
-  B: floor(sheet_W / blank_H) x floor(sheet_H / blank_W)
-Show both on the result screen, pre-select the higher count, let the user
-override — the engine recalculates instantly.
+Combination nesting, mixed-orientation nesting and orientation comparison are in `lib/engines/CLAUDE.md`.
 
 ## Paper Wrapping Rules
-**Option 1 (Printed paper)**
-  Outer paper blank = board keyline + folding allowance (default 20mm) each side,
-  editable per estimate. Inner lining blank = board keyline EXACTLY.
-
-  INNER LINING MODES: None / White paper / Printed paper / Special paper. The
-  inner carries its OWN finishing selections (`InnerWrap.finishing`, resolved,
-  costed and shown as "Finishing (inner)"). Outer finishing lives under the outer
-  wrap block (`EstimateRequest.finishing`). White paper is priced from its own
-  `white_paper_rates` table. Special inner mirrors the outer special branch.
-  Legacy snapshots without a mode resolve via `paper_rates` exactly as before.
-
-  PRINT SIZE DRIVES PAPER SIZE: the form picks the printing size FIRST; paper
-  sizes are filtered to sheets the print can be cut from (either orientation),
-  auto-picking the smallest. Blanks nest on the PRINT area, not the full paper
-  sheet; paper purchase is derived by nesting the print size onto the paper sheet
-  (`PaperPurchase`, `derivePaperPurchase`). Paper cost = purchased sheets;
-  printing + whole-sheet finishing = printed sheets. When print size == paper
-  size this reduces exactly to the old behaviour.
-
-  PRINTING WASTAGE OVERRIDE: per-estimate "Printing wastage %" field (empty =
-  auto 10/15 from `app_config`; a number overrides — heavy solid-colour jobs
-  waste more). `wastagePctOverride` on the printed `OuterWrap`.
-
-**Option 2 (Special paper)**
-  Outer blank = same as Option 1 outer. Inner blank = board keyline exactly.
-  No printing cost — paper cost only. Sheet size comes from the rate card, with
-  an input override on the form.
-
-### Magnetic inner lining
-The case's inner lining is `(Flap + W + spine H) × L` for ALL panel variants —
-the tray is glued over the other W panel, so that face is never seen. 3-panel is
-already that; 4-panel drops its second W; 5-panel drops its second W AND its
-flap-height panel. Tray lining, board and outer wrap are UNCHANGED.
-
-Implemented as a per-box-type blank-list mapper (`lib/formulas/inner-lining.ts`,
-`innerLiningBlanksFor` — identity for every unregistered type) applied at the
-INNER-layer boundary in `estimateMaterials`, gated on
-`EstimateRequest.liningVersion >= 2`. WHY NOT emit a smaller blank from
-`magneticBlanks`: formulas re-run at recompute time from a saved
-`specs_snapshot`, so an ungated emit would retroactively re-price every magnetic
-estimate ever saved. The mapper also keeps `MaterialQuantities.blanks` as the
-BOARD keylines, which the keylines, materials PDF and result panel all read.
-
-### Per-component wrapping
-`wrapping.perComponent?: Record<component, ComponentWrap>` — each part's own
-outer/inner/finishing. Engine 1 groups components by RESOLVED CONFIG IDENTITY
-(`wrapLayerGroups`), so identically-wrapped parts still nest together and share
-ONE plate; only genuinely different wraps split. With no overrides there is
-exactly one group and output is byte-identical. `outerPaperGroups` /
-`innerPaperGroups` + `wrapGroupsOf(mat, layer)` (with the legacy fallback) is what
-display and Engine 2 read. Engine 2 sums per group via `CostRates.outerGroups` /
-`innerGroups`, mapping rates to groups BY READING EACH GROUP'S COMPONENTS, never
-by assuming order. Auto printing stays estimate-level and is rejected in
-`validate()` for per-part wraps.
+Outer/inner wrap modes, print-drives-paper sizing and per-component wrapping are in `lib/engines/CLAUDE.md`.
 
 ## Printing
-User chooses offset OR digital per estimate. All printing rates live in the DB.
-
-**Auto-economical printing.** Print-size selects (outer + inner) offer "Auto —
-cheapest option" (`PrintingSelection.auto`). `resolveAutoPrinting`
-(`lib/estimate/auto-printing.ts`; pure evaluator in `auto-printing-core.ts`) runs
-BEFORE `loadEstimateRates` and concretizes the request: every size of the chosen
-TYPE × every fitting paper row at the chosen GSM, each nested through the REAL
-engine path (same wastage tier, same combine/mixed flags), cheapest
-printing+purchased-paper total wins; ties → smaller print, then paper.
-`specs_snapshot` keeps `auto` (re-runs re-optimize); `rates_snapshot` freezes the
-winner + `autoPicks`. Auto stays WITHIN the chosen type. Foam covers / card
-stocks keep explicit sizes.
-
-**Combined vs separate printing.** `EstimateRequest.printingMode?` ("combined"
-default). Separate ⇒ wrap layers never combine across components (each part is
-its own plate) AND Engine 2 charges the offset tier minimum PER COMPONENT.
-
-**Per-job offset charging + tie consolidation.** `computeCombination` takes
-`consolidateTies` — lexicographic (totalSheets, blockCount): a partition that TIES
-on sheets but needs fewer blocks (plates) wins ON WRAP LAYERS ONLY. Board and all
-insert estimators stay strict-win. `layerPrintJobs(layer)` (in `material.ts`,
-re-exported from `cost.ts`) resolves jobs = combination groups + still-alone
-components BY NAME, and `layerPrintingCost` charges one offset tier PER JOB. ONE
-GATE for both halves: `printingMode != null`.
-
-**Printing cost split.** `PrintingDetailLine {label, amount, sheets, tier}` +
-`CostBreakdown.printingDetail` / `innerPrintingDetail`, emitted with a conditional
-spread so the key is ABSENT when there is no printing and on older snapshots.
-`layerPrintingLines` mirrors `layerPrintingCost`'s branching EXACTLY and is
-deliberately NOT refactored into a shared "compute lines then sum" — float
-addition is not associative and `printing` must stay bit-identical.
-
-**Printing vendor.** `PrintingSelection.vendor?` (omitted = "any"). The unique
-keys are `(size_label, colour, vendor)` / `(size_label, vendor)` PLUS a partial
-unique index `where vendor is null` on each — load-bearing, because UNIQUE treats
-NULLs as DISTINCT and the widened key alone would permit two un-named rows per
-size. `printRow()` in `lib/db/rates.ts` filters `.eq("vendor", v)` when named,
-else does NOT filter (PostgREST cannot express `vendor is null` via `.match`) and
-orders `nullsFirst` with `.limit(1)`. Auto printing loads/filters vendor and
-WRITES THE WINNER'S VENDOR BACK into the concretized request.
+Auto-economical printing, combined-vs-separate mode, per-job offset charging and vendor keys are in `lib/engines/CLAUDE.md`.
 
 ## Finishing
-Area basis: per-sq-inch finishes (foiling, spot UV, relief/emboss) are charged on
-the actual finished DESIGN area (an L x W input on the form, per box x qty) — NOT
-the whole sheet. Whole-sheet finishes (lamination, full UV, drip-off, aquas — all
-per-100-sq-inch) stay on printed-sheet area. Design area defaults to the box
-footprint (L x W) when not entered.
-
-Relief (embossing/debossing) triggers a block charge (manual, under Additional
-Costs).
-
-**Itemised finishing.** `resolveFinishing` copies `key`/`finish` onto each
-`FinishingRate`; `finishingDetailLines` itemises per pass —
-`CostBreakdown.finishingDetail` / `innerFinishingDetail` `{label, amount}[]`
-alongside the kept totals (the sum reproduces them exactly). Scope is outer +
-inner wrap only; insert finishing stays folded into insert lines.
+Area basis and itemised finishing are in `lib/engines/CLAUDE.md`.
 
 ## Wastage Calculation
-Board / non-printed material: no wastage percentage. Wastage = sheet area not
-used after nesting, from the nesting math:
-  boxes_per_sheet = floor(sheet_W / blank_W) x floor(sheet_H / blank_H)
-  sheets_needed = ceil(quantity / boxes_per_sheet)
-
-PRINTED paper: always run extra sheets for setup/spoilage — +10% if printing
-only, +15% if printing + foiling/UV. Applied to the printed paper sheet count per
-component (ceil), flowing into paper + printing + whole-sheet finishing cost.
-Engine 1 `wastagePct`; `build-estimate` decides 0/10/15 from the selections.
-Applies to the outer wrap AND the PRINTED inner lining — the inner tier keys off
-the INNER's own foil/UV finishing. White / special / unprinted inner get none.
-Only the outer has the per-estimate override field.
-
-Wastage is applied PER PLATE, independently: `applyWastage` inflates each
-combination group's and each lone component's `sheetsNeeded` separately and
-`Math.ceil`s each, then sums — so two separately-printed components get the %
-applied to each with two independent round-ups.
+Wastage tiers and per-plate application are in `lib/engines/CLAUDE.md`.
 
 ## Keyline Visual
-Rendered as SVG in React, no external library. One component per box type in
-`/components/keylines/`. Draws the flat blank shape + fold lines (dashed) +
-dimension labels, parametrically from blank dimensions passed as props — never
-hardcoded. Geometry helpers are extracted to `lib/nesting/geometry.ts` (pure,
-type-only engine imports) and shared with the PDF renderer; any new renderer must
-consume it too.
-
-## Costing Layers (in order)
-Level 1 — Raw materials: board · wrapping paper · lining paper · printing ·
-finishing · inserts · accessories · fixed RM costs (tape computed; glue + metlock
-manual)
-Level 1 — Labour: multi-role; per-hour or per-day x quantity
-Level 2 — Overhead: +% of level 1, editable
-Level 3 — Margin: +% of level 2, editable, admin-only
-After margin (no margin applied): additional costs (one-time, block, designer)
-GST: applied at quotation stage, not in Engine 2
+Keyline rendering rules are in `components/keylines/CLAUDE.md`.
 
 ## Auto-triggered Costs by Box Type
 Magnets + Washers + Metlock auto-include for: magnetic, double decker,
@@ -433,45 +252,10 @@ by quantity × unit rate); metlock auto-prompts for magnetic / hinge-lid /
 shoulder-neck / foam / reverse-board.
 
 ## Inserts
-- **Foam**: type (XLPE / EPE / PU) + thickness. Pieces per sheet = better of
-  (L_foam/L x B_foam/W) vs (L_foam/W x B_foam/L). MULTIPLE foam inserts per
-  estimate (`inserts.foams[]`; old snapshots' single `foam` honoured). PER-MM
-  PRICE: `foam_rates.rate_per_mm` — when set (>0) sheet price = rate x thickness;
-  `cost_per_sheet` is the flat fallback. BOARD COVERING per insert: top/bottom
-  toggles; pieces cut to the foam footprint from art paper / art card / special
-  paper; optional PRINTING follows the outer/inner formula exactly (+10% wastage,
-  never 15 — no foil/UV on covers). `FoamInsertSelection.punchingMargin_mm` adds
-  mm per side when NESTING (`FoamEstimate.nestedBlank`); covers still cut to the
-  raw footprint.
-- **Reverse board**: keyline = tray formula using insert height Hi:
-  (Hi+L+Hi) x (Hi+W+Hi). Top paper: same as paper calc on the board keyline, NO
-  folding allowance.
-- **Card insert**: open dimension. Cost is a manual open input; optional
-  descriptive size / materialType / gsm document what the floor buys.
-- **Ribbon tag**: auto for drawer / double decker; standard price or custom.
-- **Sleeve**: `InsertsSelection.sleeve` = `{dims, stock: SleeveStock}` where
-  `SleeveStock` = `CardStockSelection` minus lamination plus FULL finishing.
-  Runs `estimateCardInsert` (keyline exact, no folding allowance) with the 10/15
-  wastage tier off its OWN foil/UV. Only paper and art card — not kappa board.
-- **Beading / Card partition / Custom card partition**: shared `CardStockSelection`.
-  Blanks (L+4BH+2BT)×(W+4BH+2BT) ×1 · (H+H)×L ×nL + (H+H)×W ×nW (may share
-  sheets) · L×W ×count. Material = art paper / board+type / special. Printing
-  follows the print-drives-purchase model (+10% wastage). Lamination is a single
-  dropdown, not the full `FinishingPicker` — deliberate: one pass is the spec.
-- **Handles / Locks**: type + number + size; cost = number x price-by-type.
-  Manual, not auto.
-- **Window**: size L x W; nests the window film like foam. `punchingMargin_mm` is
-  FORCE-SET by `buildEstimate` to `WINDOW_PUNCHING_MARGIN_MM` (=10), overriding
-  whatever the client sends, so it lands in `specs_snapshot` and can't be skipped.
-  The form shows a static "10mm added automatically" note.
+Foam, reverse board, card, ribbon tag, sleeve, beading/partitions, handles/locks and window are in `lib/engines/CLAUDE.md`.
 
 ## Miscellaneous Add-ons
-`AddonsSelection.misc[]` — dynamic list on the form (label / optional L×W / units
-/ manual price per unit). Cost = units × price, a Level-1 RM line (`addonsMisc`)
-so overhead + margin apply; dropped with the inserts section.
-`MiscAddonSelection.perBox` multiplies by the production quantity like
-handles/locks/magnets; ABSENT on old snapshots keeps the flat total.
-`misc_rates` is also a rate-card section.
+See `lib/engines/CLAUDE.md`.
 
 ## Manual line edits
 `EstimateRequest.adjustments?: CostAdjustment[]` (`{line, to, note, basis}`) rides
@@ -527,66 +311,13 @@ Default for new estimates is "separate"; hydrating an OLD snapshot sets
 unset so every saved snapshot recomputes byte-identically.
 
 ## GST (quotation stage)
-- 5% on rigid boxes / monocartons / carry bags (the box price)
-- 18% on additional costs, stickers, paper printing
-
-NOTE: these are hardcoded constants (`BOX_GST_PCT`, `ADDL_GST_PCT` in
-`lib/pdf/quotation-data.ts`, duplicated in `components/quotes/quote-preview.tsx`)
-with the rates written into label strings. See "Known gaps" below.
+GST rates and where they are hardcoded are in `lib/pdf/CLAUDE.md`. See also "Known gaps" below.
 
 ## Quotation + Branding
-Every generated quote is SAVED to the `quotes` table with a running number
-`<PREFIX>/26-27/001` (Indian FY Apr–Mar; atomic counter via `quote_counters` +
-`next_quote_no()` RPC; prefix = `BRAND.quotePrefix`). Both PDF paths (POST
-`/api/quote` multi + GET `/api/estimate/[id]/quote` single) go through
-`lib/pdf/generate-quote.ts` `issueQuote()` — number, save (items/terms/totals/
-bill-to snapshot), stream. `/quotes` lists them; "PDF" re-renders from the SAVED
-snapshot (GET `/api/quote/[id]/pdf` — never recomputed).
-
-The box subtotal is `cost.subtotalAfterMargin` (fallback `total_price −
-additional.total`). PDF item specs are structured multi-line (`specsLines()`).
-
-REVISIONS: re-quoting an already-quoted estimate keeps the ORIGINAL number and
-appends -R1, -R2 (`nextRevisionNo`) instead of burning a new FY sequence number.
-`baseQuoteNo` strips the suffix. Custom quotes save with `estimate_ids: []` and a
-real FY number — `nextRevisionNo` returns null for an empty list, so they are
-never treated as a revision.
-
-QUOTE PREVIEW: `/quotes/new` is two steps — pick a source (saved estimates or a
-blank custom quote), then REVIEW AND EDIT the whole document (bill-to, per-item
-description/specs/qty/unit price, one-time charge lines, free-text notes, terms)
-with GST and totals recomputing live. Nothing is numbered, saved or rendered
-until "Generate PDF". EVERY derived number is recomputed server-side by
-`finalizeQuoteDraft`, so a browser cannot post a quote whose totals disagree with
-its items or that skips GST; negative/NaN input clamps to 0.
-
-BRAND: all identity lives in `lib/brand.ts` (name, monogram, tagline, address,
-GSTIN, bank block, quote prefix, currency dressing, logo intrinsics). It is PURE —
-no `server-only`, no React — so client components, PDF builders and offline
-scripts all import it. `COMPANY` (`quote-shared.ts`) and `BANK`/`QUOTE_PREFIX`
-(`quotation-data.ts`) are built FROM it; `COMPANY`'s object SHAPE is load-bearing
-(`QuotationData.company: typeof COMPANY`).
-
-Rebranding = replace `lib/brand.ts` + `public/brand/logo.png` + `app/icon.png` +
-`app/apple-icon.png` + `app/favicon.ico`, plus the navy/gold hexes in
-`app/globals.css` and the two PDF documents.
-
-CURRENCY: `lib/currency.ts` `formatMoney()` is the single formatter, reading
-`BRAND.currencySymbol` / `currencyLocale` / `currencyDivisor`. The divisor scales
-COMPUTED amounts at render time only (1 = no scaling); it deliberately does NOT
-reach rate-card cells (editable — a scaled display would be saved back scaled) or
-live echoes of numbers just typed into the form.
+Quote numbering, revisions, the preview flow, `lib/brand.ts` and currency dressing are in `lib/pdf/CLAUDE.md`.
 
 ## Raw-material PDF (cost-free)
-GET `/api/estimate/[id]/materials` — any authenticated role. Recomputes from the
-frozen snapshots (legacy snapshot → 422). The data builder
-`lib/pdf/materials-data.ts` is PURE (meta + `specs_snapshot` + materials only —
-structurally cannot leak a cost; validated by a no-currency-bytes check). Layout:
-header (SS number, dims, box type, qty, client, date), kappa board block then
-keylines, wrapping organised per component (identically-wrapped parts note their
-shared sheet/plate so counts don't double), foam (+cover) / reverse board (+top
-paper) / accessory counts / consumables / one-time investment. Handle/lock/misc
-rows embed their rate-card photo.
+See `lib/pdf/CLAUDE.md`.
 
 ## Rate data integrity
 Engine 1 nests on a rate row's `width_in`/`height_in` — NEVER on its `size_label`.
@@ -597,12 +328,10 @@ error quotes the paper's NAME alongside its stored size plus an explicit note
 (`labelMatchesSheet` in `build-estimate.ts`).
 
 ## Config surface
-`app_config` (numeric only): `folding_allowance_mm`, `inner_lining_reduction_mm`,
-`lid_depth_default_in`, `moq`, `overhead_pct`, `print_wastage_pct`,
-`print_foil_wastage_pct`. `margin_config`: `default_margin_pct` (admin-only via
-RLS, excluded from staff proposals).
+`app_config` / `margin_config` field definitions live in `supabase/schema.sql`.
 
-**THREE OF THESE ARE DEAD** — editable on the rate card but read by nothing:
+**THREE `app_config` FIELDS ARE DEAD** — editable on the rate card but read by
+nothing:
 - `moq` — not enforced anywhere; the form hardcodes the sentence "MOQ is 500."
 - `lid_depth_default_in` — the real default is three separate
   `DEFAULT_LID_DEPTH_IN = 1.5` constants (`telescopic.ts`, `shoulder.ts`,
@@ -645,15 +374,22 @@ it carries assumptions from the market it was first built for.
   two files with the rates baked into label strings. There is no per-line tax
   rate, no HSN/SAC field, no CGST/SGST/IGST split, no tax-exempt path. VAT or US
   sales tax needs a different shape entirely, and `quotes.gst` is a schema column.
+  v8 only made it HONEST for other markets — a non-INR quote shows no tax line
+  at all rather than an Indian one. Those quotes are therefore pre-tax
+  documents, which is the correct stopgap but not a tax implementation.
 - **Quote numbering assumes the Indian financial year.** `fyLabel()` hardcodes the
   April cutover and `quote_counters` is keyed on the FY string. A Jan–Dec company
   gets silently wrong years, not an error.
 - **Units.** Inches are the storage contract (see ## Units). A metric-native
   customer can type mm, but every rate card, keyline diagram, quotation spec line
   and raw-material sheet still says inches.
-- **Currency.** No currency column exists on any table, so historical rows have no
-  migration path if the currency changes. The PDF uses a text prefix because the
-  built-in Helvetica has no rupee glyph.
+- **Currency.** PARTLY CLOSED by v8: every priced rate table and `quotes` now
+  carry a `currency`, and a trial account is priced in its own market. Still
+  open: admin/staff have no per-market choice (the deployment is INR, dressed
+  as dollars by `BRAND` — see lib/brand.ts), there is no FX/conversion anywhere
+  (each market is separately priced, by design), and a market cannot be changed
+  after it is picked. The PDF still uses a text prefix because the built-in
+  Helvetica has no rupee glyph.
 - **Default terms.** `DEFAULT_TERMS` is a code array containing one company's
   payment, lead-time, delivery-city and return policy. Editable per quote and
   snapshotted into `quotes.terms`, but the defaults are wrong until edited.

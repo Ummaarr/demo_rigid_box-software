@@ -19,14 +19,20 @@ export interface QuoteListItem {
  * Load all saved quotes, newest first. Returns null when the quotes table
  * doesn't exist yet (live DB pre-migration-round3.sql) so the page can show a
  * "run the migration" notice instead of crashing.
+ *
+ * `createdBy`: pass a user id to return ONLY that user's own quotes (trial
+ * accounts — see ownerScopeFor() in lib/auth.ts); null/omitted returns every
+ * quote, which is what admin and staff have always got.
  */
 export async function loadQuotesList(
   supabase: SupabaseClient,
+  createdBy: string | null = null,
 ): Promise<QuoteListItem[] | null> {
-  const { data, error } = await supabase
+  const base = supabase
     .from("quotes")
     .select("id, quote_no, bill_to, items, grand_total, status, created_at")
     .order("created_at", { ascending: false });
+  const { data, error } = await (createdBy == null ? base : base.eq("created_by", createdBy));
 
   if (error) {
     // 42P01 = undefined table (pre-migration DB).

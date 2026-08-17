@@ -17,6 +17,7 @@ import type { EstimateRequest, OuterWrap, InnerWrap, PrintingSelection } from "@
 import { DEFAULT_BOARD_TYPE } from "@/types";
 import { chargeDetail } from "@/lib/estimate/charges";
 import { BRAND } from "@/lib/brand";
+import type { MoneyFormat } from "@/lib/currency";
 
 /** One line: what it is, how much of it, the total and the per-box share. */
 export interface CostViewRow {
@@ -142,7 +143,14 @@ export function buildCostView(
   specs: EstimateRequest,
   cost: CostBreakdown,
   materials?: MaterialQuantities,
+  // A trial account's own market dressing (lib/currency-meta.ts). Omitted —
+  // as every offline validator in /scripts does — keeps the BRAND-based
+  // `rate()` above, so existing output is byte-identical.
+  money?: MoneyFormat,
 ): CostViewSection[] {
+  // No divisor for a trial: their card is priced in its own currency, so
+  // there is nothing to scale (see the note on `rate` above).
+  const rateStr = money ? (n: number) => `${money.symbol}${n2(n)}` : rate;
   // Per-box always divides by the ORDERED quantity (client item 3).
   const orderedQty = cost.orderedQuantity ?? specs.quantity ?? 0;
   const per = (n: number) => (orderedQty > 0 ? n / orderedQty : 0);
@@ -454,7 +462,7 @@ export function buildCostView(
           "Glue",
           cost.glue,
           specs.manual?.glueQty
-            ? `${n2(specs.manual.glueQty.qty)} ${specs.manual.glueQty.unit} × ${rate(specs.manual.glueQty.rate)}`
+            ? `${n2(specs.manual.glueQty.qty)} ${specs.manual.glueQty.unit} × ${rateStr(specs.manual.glueQty.rate)}`
             : "manual cost",
           "glue",
         )
@@ -464,7 +472,7 @@ export function buildCostView(
           "Metlock",
           cost.metlock,
           specs.manual?.metlockQty
-            ? `${n2(specs.manual.metlockQty.qty)} ${specs.manual.metlockQty.unit} × ${rate(specs.manual.metlockQty.rate)}`
+            ? `${n2(specs.manual.metlockQty.qty)} ${specs.manual.metlockQty.unit} × ${rateStr(specs.manual.metlockQty.rate)}`
             : "manual cost",
           "metlock",
         )
@@ -513,7 +521,7 @@ export function buildCostView(
           chargeRow(
             d.label,
             d.amount,
-            d.qty != null && d.rate != null ? `${d.qty} × ${rate(d.rate)}` : undefined,
+            d.qty != null && d.rate != null ? `${d.qty} × ${rateStr(d.rate)}` : undefined,
           ),
         )
       : [cost.additional.total ? chargeRow("One-time charges", cost.additional.total) : null],

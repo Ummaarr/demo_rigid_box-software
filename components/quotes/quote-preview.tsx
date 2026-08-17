@@ -23,9 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { NumberField } from "@/components/ui/number-field";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InlineNotice } from "@/components/ui/inline-notice";
-import { formatMoney } from "@/lib/currency";
-
-const inr = formatMoney;
+import { useCurrencyCode, useMoneyFormatter } from "@/lib/currency-context";
 
 // Mirrors lib/pdf/quotation-data.ts (BOX_GST_PCT / ADDL_GST_PCT). Display only.
 const BOX_GST_PCT = 5;
@@ -72,6 +70,13 @@ export function QuotePreview({
   onBack?: () => void;
   backLabel?: string;
 }) {
+  const inr = useMoneyFormatter();
+  // GST is India-only (5% boxes / 18% charges — see lib/pdf/quotation-data.ts,
+  // which this block mirrors). A trial evaluating from another market would
+  // otherwise see an Indian tax on their own quote, so it is dropped entirely
+  // there rather than guessed at. VAT / US sales tax needs a different shape
+  // and stays a documented gap. Admin/staff resolve to INR and are unaffected.
+  const gstApplies = useCurrencyCode() === "INR";
   const [draft, setDraft] = useState<QuoteDraftState>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,8 +94,8 @@ export function QuotePreview({
       (s, it) => s + it.charges.reduce((c, ch) => c + (ch.amount || 0), 0),
       0,
     );
-    const boxGst = (subTotal * BOX_GST_PCT) / 100;
-    const addlGst = (additional * ADDL_GST_PCT) / 100;
+    const boxGst = gstApplies ? (subTotal * BOX_GST_PCT) / 100 : 0;
+    const addlGst = gstApplies ? (additional * ADDL_GST_PCT) / 100 : 0;
     return {
       subTotal,
       additional,
@@ -98,7 +103,7 @@ export function QuotePreview({
       addlGst,
       grand: subTotal + additional + boxGst + addlGst,
     };
-  }, [draft.items]);
+  }, [draft.items, gstApplies]);
 
   async function generate() {
     setBusy(true);
@@ -360,8 +365,10 @@ export function QuotePreview({
             {totals.additional > 0 && (
               <Row label="One-time charges" value={inr(totals.additional)} />
             )}
-            <Row label={`GST @ ${BOX_GST_PCT}% (boxes)`} value={inr(totals.boxGst)} muted />
-            {totals.additional > 0 && (
+            {gstApplies && (
+              <Row label={`GST @ ${BOX_GST_PCT}% (boxes)`} value={inr(totals.boxGst)} muted />
+            )}
+            {gstApplies && totals.additional > 0 && (
               <Row label={`GST @ ${ADDL_GST_PCT}% (charges)`} value={inr(totals.addlGst)} muted />
             )}
             <div className="my-1 border-t" />

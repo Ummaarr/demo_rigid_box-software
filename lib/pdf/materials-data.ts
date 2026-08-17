@@ -54,9 +54,14 @@ import {
 import { specsLines, COMPANY } from "@/lib/pdf/quote-shared";
 import { boxLabel } from "@/lib/box-types";
 
-const NAVY = "#1F2A5C";
-const GOLD = "#C6A24C";
-const COMBO_PALETTE = [NAVY, GOLD, "#4F7942", "#A0522D"];
+// Warm espresso + clay, mirroring --primary and --clay in app/globals.css.
+// Literals because this data feeds react-pdf, which cannot read CSS custom
+// properties. INK/SOFT keep the normal-vs-rotated distinction the diagrams
+// rely on — that pairing is functional, not decorative, so the two tones
+// must stay clearly apart — two hues, not two shades of one.
+const INK = "#33261C";
+const SOFT = "#B4552D";
+const COMBO_PALETTE = [INK, SOFT, "#7D6A3F", "#9C4F4F"];
 
 // --- primitive shapes the document renders ---------------------------------
 
@@ -199,8 +204,8 @@ function componentDiagram(
     caption: `${pretty(c.component)}: sheet ${sheetDims(est.sheet)} · cut ${fmtIn(g.w_in)} × ${fmtIn(g.h_in)} in · ${layout}${tail}`,
     sheetW_in: est.sheet.width_in,
     sheetH_in: est.sheet.height_in,
-    rects: rects.map((r) => ({ x_in: r.x_in, y_in: r.y_in, w_in: r.w_in, h_in: r.h_in, colour: GOLD, fillOpacity: r.rotated ? 0.5 : 0.22 })),
-    creases: c.mixed ? [] : creaseSegs(rects, panels, est.sheet, () => NAVY),
+    rects: rects.map((r) => ({ x_in: r.x_in, y_in: r.y_in, w_in: r.w_in, h_in: r.h_in, colour: SOFT, fillOpacity: r.rotated ? 0.5 : 0.22 })),
+    creases: c.mixed ? [] : creaseSegs(rects, panels, est.sheet, () => INK),
   };
 }
 
@@ -242,7 +247,7 @@ function estimateDiagrams(
       sheetH_in: purchase.paperSheet.height_in,
       rects: purchase.layout.map((r) => {
         const rot = r.orientation !== purchase.chosen;
-        return { x_in: r.x_in, y_in: r.y_in, w_in: r.w_in, h_in: r.h_in, colour: rot ? GOLD : NAVY, fillOpacity: rot ? 0.3 : 0.22 };
+        return { x_in: r.x_in, y_in: r.y_in, w_in: r.w_in, h_in: r.h_in, colour: rot ? SOFT : INK, fillOpacity: rot ? 0.3 : 0.22 };
       }),
       creases: [],
     });
@@ -272,7 +277,7 @@ function pieceDiagram(
     sheetH_in: sheet.height_in,
     rects: rects.map((r) => ({
       x_in: r.x_in, y_in: r.y_in, w_in: r.w_in, h_in: r.h_in,
-      colour: GOLD, fillOpacity: r.rotated ? 0.5 : 0.22,
+      colour: SOFT, fillOpacity: r.rotated ? 0.5 : 0.22,
     })),
     creases: [],
   };
@@ -413,8 +418,8 @@ export function buildMaterialsData(
         blankW_in: b.width_in,
         blankH_in: b.height_in,
         creases: [
-          ...(c?.xFolds ?? []).map((f) => ({ x1: f, y1: 0, x2: f, y2: b.height_in, colour: NAVY })),
-          ...(c?.yFolds ?? []).map((f) => ({ x1: 0, y1: f, x2: b.width_in, y2: f, colour: NAVY })),
+          ...(c?.xFolds ?? []).map((f) => ({ x1: f, y1: 0, x2: f, y2: b.height_in, colour: INK })),
+          ...(c?.yFolds ?? []).map((f) => ({ x1: 0, y1: f, x2: b.width_in, y2: f, colour: INK })),
         ],
       };
     }),

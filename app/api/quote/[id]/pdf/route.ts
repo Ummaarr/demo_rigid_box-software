@@ -2,7 +2,8 @@
 // snapshot (items/terms/totals/bill-to frozen at issue time — no recompute, so
 // the document never drifts from what was originally sent).
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
+import { isCurrencyCode } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
 import { renderQuotePdf, quoteFilename } from "@/lib/pdf/generate-quote";
 import {
@@ -29,10 +30,10 @@ export async function GET(
   }
 
   const { id } = await params;
-  const { data: q, error } = await createAdminClient()
-    .from("quotes")
-    .select("*")
-    .eq("id", id)
+  // Trial accounts can only re-render their own saved quotes.
+  const scope = ownerScopeFor(session);
+  const base = createAdminClient().from("quotes").select("*").eq("id", id);
+  const { data: q, error } = await (scope == null ? base : base.eq("created_by", scope))
     .maybeSingle();
   if (error) {
     console.error("GET /api/quote/[id]/pdf failed:", error);
@@ -59,6 +60,11 @@ export async function GET(
     terms: q.terms as string[],
     // Absent on quotes issued before round 10 (and on a pre-migration DB).
     ...(q.notes ? { notes: q.notes as string } : {}),
+    // The market it was ISSUED in — deliberately not the re-generating
+    // session's, so an admin re-rendering a trial's quote reproduces the
+    // original document rather than converting it to INR. Absent on quotes
+    // predating multi-currency, which fall back to the BRAND dressing.
+    ...(isCurrencyCode(q.currency) ? { currency: q.currency } : {}),
     company: COMPANY,
     bank: BANK,
   };

@@ -8,7 +8,8 @@
 // Response: QuotationData (its `quoteNo` is the placeholder; the real FY number
 // is only assigned by POST /api/quote when the quote is actually issued).
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
+import { currencyCodeFor } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
 import { buildMultiQuotationData } from "@/lib/pdf/quotation-data";
 
@@ -39,6 +40,10 @@ export async function POST(request: Request) {
       estimateIds,
       session.fullName ?? "—",
       body.clientId,
+      undefined,
+      undefined,
+      ownerScopeFor(session),
+      currencyCodeFor(session),
     );
     if (!data) {
       return Response.json({ error: "No estimates found." }, { status: 404 });

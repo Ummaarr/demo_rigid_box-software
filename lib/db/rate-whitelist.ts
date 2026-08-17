@@ -77,7 +77,10 @@ export const ALLOWED: Record<string, { fields: Set<string>; idCol: "id" | "key" 
   window_rates:           { fields: new Set(["name", "film_width_in", "film_height_in", "cost_per_sheet", "vendor", "is_dummy"]),    idCol: "id" },
   misc_rates:             { fields: new Set(["name", "unit", "width_in", "height_in", "thickness_mm", "price", "vendor", "is_dummy"]), idCol: "id" },
   app_config:             { fields: new Set(["value"]),                                                                               idCol: "key" },
-  margin_config:          { fields: new Set(["value"]),                                                                               idCol: "key" },
+  // idCol "id" (not "key" — trial-role): a trial user's own margin_config row
+  // can share a `key` value with the master row, so `key` alone no longer
+  // identifies one row. See schema.sql's v7 block.
+  margin_config:          { fields: new Set(["value"]),                                                                               idCol: "id" },
 };
 
 // Per-table INSERT allowlist — required + optional allowed fields.
@@ -132,7 +135,14 @@ export function validateRateValue(
 /**
  * Apply a validated rate update, stamping updated_at/updated_by exactly like a
  * direct admin edit. `byName` is the human shown in the "updated by" column.
- * Returns { updated_at, updated_by } on success or an error string.
+ * `caller` is who's making the change — every table except app_config now
+ * carries owner_id (trial-role isolation, supabase/migration-trial-role.sql),
+ * and an admin may only touch a shared (owner_id null) row while a trial user
+ * may only touch their own — checked here, the single choke point every
+ * write path (direct PATCH, insert-then-edit, and the propose/approve
+ * workflow) goes through. Returns { updated_at, updated_by } on success or an
+ * error string ("Not found." on an ownership mismatch, not "Forbidden" — an
+ * ID an attacker doesn't own should look exactly like one that doesn't exist).
  */
 export async function applyRateUpdate(
   admin: SupabaseClient,
@@ -141,6 +151,7 @@ export async function applyRateUpdate(
   field: string,
   value: unknown,
   byName: string,
+  caller: { role: string | null; userId: string },
 ): Promise<{ updated_at: string; updated_by: string | null } | { error: string }> {
   const invalid = validateRateValue(table, field, value);
   if (invalid) return { error: invalid };
@@ -148,6 +159,21 @@ export async function applyRateUpdate(
   value = normaliseRateValue(table, field, value);
 
   const { idCol } = ALLOWED[table];
+
+  if (table !== "app_config") {
+    const { data: existing, error: findErr } = await admin
+      .from(table)
+      .select("owner_id")
+      .eq(idCol, id)
+      .maybeSingle();
+    if (findErr || !existing) return { error: "Not found." };
+    const rowOwnerId = (existing as { owner_id: string | null }).owner_id;
+    const allowed =
+      (caller.role === "admin" && rowOwnerId === null) ||
+      (caller.role === "trial" && rowOwnerId === caller.userId);
+    if (!allowed) return { error: "Not found." };
+  }
+
   const updatedAt = new Date().toISOString();
   // Only rate tables carry `updated_by`; config tables would 400 on it.
   const updatedBy =

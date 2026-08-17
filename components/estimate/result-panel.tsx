@@ -16,7 +16,7 @@ import type {
 import type { AdjustableLine, CostBreakdown, FinishingDetailLine } from "@/lib/engines/cost";
 import type { ChargeDetail } from "@/lib/estimate/charges";
 import type { CostViewSection } from "@/lib/estimate/cost-view";
-import { formatMoney } from "@/lib/currency";
+import { useMoneyFormatter } from "@/lib/currency-context";
 import { PrintPurchaseDiagram } from "./nesting-diagram";
 
 /**
@@ -60,7 +60,6 @@ export interface AutoPickInfo {
   considered: number;
 }
 
-const inr = formatMoney;
 
 const fmtDim = (n: number) =>
   Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
@@ -83,6 +82,7 @@ export function CostViewTable({
   onEditLine?: (line: AdjustableLine, to: number, basis: number) => void;
   onResetLine?: (line: AdjustableLine) => void;
 }) {
+  const inr = useMoneyFormatter();
   // Which row is being edited, and its in-progress text.
   const [editing, setEditing] = useState<
     { line: AdjustableLine; value: string; basis: number } | null
@@ -494,6 +494,7 @@ export function FinishingRows({
   detail?: FinishingDetailLine[];
   qty: number;
 }) {
+  const inr = useMoneyFormatter();
   return (
     <>
       <Row label={label} value={inr(total)} />
@@ -540,6 +541,7 @@ export function ResultPanel({
   onEditLine?: (line: AdjustableLine, to: number, basis: number) => void;
   onResetLine?: (line: AdjustableLine) => void;
 }) {
+  const inr = useMoneyFormatter();
   const acc = cost.accessories;
 
   return (

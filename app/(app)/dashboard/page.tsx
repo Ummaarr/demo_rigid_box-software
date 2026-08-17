@@ -9,7 +9,7 @@ import {
   FileText,
 } from "lucide-react";
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadDashboardStats } from "@/lib/db/dashboard";
 import { Button } from "@/components/ui/button";
@@ -19,12 +19,15 @@ import { TrendAreaChart } from "@/components/dashboard/trend-area-chart";
 import { BoxTypePie } from "@/components/dashboard/box-type-pie";
 import { RecentEstimatesTable } from "@/components/dashboard/recent-estimates";
 import { formatMoney } from "@/lib/currency";
-
-const inr = { format: (n: number) => formatMoney(n, 0) };
+import { currencyMetaFor } from "@/lib/currency-meta";
 
 export default async function DashboardPage() {
   const session = await verifySession();
-  const stats = await loadDashboardStats(createAdminClient(), session.role);
+  const stats = await loadDashboardStats(createAdminClient(), session.role, ownerScopeFor(session));
+  // Server component — resolve the trial's market from the session directly
+  // rather than the client context. undefined keeps BRAND's dressing.
+  const meta = currencyMetaFor(session);
+  const inr = { format: (n: number) => formatMoney(n, 0, meta) };
 
   const kpis: StatItem[] = [
     {

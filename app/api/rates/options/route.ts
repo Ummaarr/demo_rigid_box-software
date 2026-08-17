@@ -2,7 +2,7 @@
 // Distinct rate options for the estimate form's dropdowns (paper sizes/GSMs,
 // printing sizes, finishing types). Authenticated; server-side DB read.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadRateOptions } from "@/lib/db/rate-options";
 
@@ -12,7 +12,7 @@ export async function GET() {
     return Response.json({ error: "Not authenticated." }, { status: 401 });
   }
   try {
-    const options = await loadRateOptions(createAdminClient());
+    const options = await loadRateOptions(createAdminClient(), ownerScopeFor(session));
     return Response.json(options);
   } catch (err) {
     console.error("GET /api/rates/options failed:", err);

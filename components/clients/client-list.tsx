@@ -78,7 +78,9 @@ export function ClientList({
   const [search, setSearch] = useState("");
   // Lead / customer filter chips (client 4-Jul type column).
   const [typeFilter, setTypeFilter] = useState<"all" | "lead" | "customer">("all");
-  const isAdmin = role === "admin";
+  // Trial accounts manage their OWN clients (every client they can see is
+  // theirs); the API enforces that scope independently.
+  const canManage = role === "admin" || role === "trial";
 
   const q = search.trim().toLowerCase();
   const filtered = clients.filter((c) => {
@@ -177,7 +179,7 @@ export function ClientList({
                   Added {fmtDate(c.created_at)}
                 </p>
 
-                {isAdmin && (
+                {canManage && (
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"

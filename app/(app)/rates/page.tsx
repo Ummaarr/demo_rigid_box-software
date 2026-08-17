@@ -3,9 +3,10 @@
 // loadAllRates) and can PROPOSE changes; admins edit directly and get a
 // pending-proposals strip to approve/reject.
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadAllRates } from "@/lib/db/rate-admin";
+import { currencyMetaFor } from "@/lib/currency-meta";
 import { RateCard } from "@/components/rates/rate-card";
 import { PendingChanges, type PendingChange } from "@/components/rates/pending-changes";
 import { PageHeader } from "@/components/page-header";
@@ -23,9 +24,11 @@ async function loadPending(): Promise<PendingChange[]> {
 export default async function RatesPage() {
   const session = await verifySession();
   const isAdmin = session.role === "admin";
+  const isTrial = session.role === "trial";
+  const meta = currencyMetaFor(session);
 
   const [sections, pending] = await Promise.all([
-    loadAllRates(createAdminClient(), session.role),
+    loadAllRates(createAdminClient(), session.role, ownerScopeFor(session), meta?.symbol),
     isAdmin ? loadPending() : Promise.resolve([]),
   ]);
 
@@ -36,7 +39,9 @@ export default async function RatesPage() {
         description={
           isAdmin
             ? "Click any value to edit inline. Saving a rate auto-marks it as Real. Click the status badge to toggle manually."
-            : "Rates are read-only for staff — click any value to propose a change; an admin approves it before it applies."
+            : isTrial
+              ? "This is your own private rate card — click any value to edit it directly. It only affects your own estimates."
+              : "Rates are read-only for staff — click any value to propose a change; an admin approves it before it applies."
         }
       />
 

@@ -68,7 +68,20 @@ export interface RateOptions {
 
 export async function loadRateOptions(
   supabase: SupabaseClient,
+  // null = the shared master card (admin/staff — unchanged behaviour); a
+  // trial user's id = ONLY their own private clone. Always derive from the
+  // session via ownerScopeFor() in lib/auth.ts, never a client value.
+  ownerId: string | null = null,
 ): Promise<RateOptions> {
+  // Every rate table below carries owner_id (trial-role isolation — see
+  // supabase/migration-trial-role.sql). Generic in the builder type so each
+  // query keeps its own row typing; the internal cast is only needed because
+  // .is/.eq aren't expressible on a bare type parameter.
+  const own = <T,>(q: T): T =>
+    ownerId == null
+      ? (q as unknown as { is: (c: string, v: null) => T }).is("owner_id", null)
+      : (q as unknown as { eq: (c: string, v: string) => T }).eq("owner_id", ownerId);
+
   const [
     board,
     paper,
@@ -94,32 +107,32 @@ export async function loadRateOptions(
     misc,
     foilFinish,
   ] = await Promise.all([
-    supabase.from("board_rates").select("thickness_mm,sheet_width_in,sheet_height_in").order("thickness_mm"),
-    supabase.from("paper_rates").select("size_label,gsm").order("size_label").order("gsm"),
-    supabase.from("white_paper_rates").select("size_label,gsm").order("size_label").order("gsm"),
-    supabase.from("art_card_rates").select("type,size_label,gsm").order("size_label").order("gsm"),
-    supabase.from("special_paper_rates").select("name,size_label,width_in,height_in,gsm").order("name"),
-    supabase.from("offset_printing_rates").select("size_label, colour, vendor").order("size_label"),
+    own(supabase.from("board_rates").select("thickness_mm,sheet_width_in,sheet_height_in").order("thickness_mm")),
+    own(supabase.from("paper_rates").select("size_label,gsm").order("size_label").order("gsm")),
+    own(supabase.from("white_paper_rates").select("size_label,gsm").order("size_label").order("gsm")),
+    own(supabase.from("art_card_rates").select("type,size_label,gsm").order("size_label").order("gsm")),
+    own(supabase.from("special_paper_rates").select("name,size_label,width_in,height_in,gsm").order("name")),
+    own(supabase.from("offset_printing_rates").select("size_label, colour, vendor").order("size_label")),
     // Defensive: a live DB pre-migration-offset-colour has no `colour` column,
     // so this errors — treated as "single-colour not available yet" below.
-    supabase.from("offset_printing_rates").select("size_label").eq("colour", "single").limit(1),
-    supabase.from("digital_printing_rates").select("size_label, vendor").order("size_label"),
-    supabase.from("lamination_rates").select("type").order("type"),
-    supabase.from("foiling_rates").select("color").order("color"),
-    supabase.from("uv_coating_rates").select("type,unit").order("type"),
-    supabase.from("relief_rates").select("type").order("type"),
-    supabase.from("foam_rates").select("type,thickness_mm,sheet_width_in,sheet_height_in").order("type").order("thickness_mm"),
-    supabase.from("reverse_board_rates").select("thickness_mm,sheet_width_in,sheet_height_in").order("thickness_mm"),
-    supabase.from("magnet_rates").select("diameter_mm,thickness_mm").order("diameter_mm").order("thickness_mm"),
-    supabase.from("washer_rates").select("name").order("name"),
-    supabase.from("ribbon_tag_rates").select("size_label").order("size_label"),
-    supabase.from("handle_rates").select("id,type,image_path").order("type"),
-    supabase.from("lock_rates").select("id,type,image_path").order("type"),
-    supabase.from("window_rates").select("id,name,image_path,film_width_in,film_height_in").order("name"),
-    supabase.from("labour_rates").select("name").order("name"),
+    own(supabase.from("offset_printing_rates").select("size_label").eq("colour", "single").limit(1)),
+    own(supabase.from("digital_printing_rates").select("size_label, vendor").order("size_label")),
+    own(supabase.from("lamination_rates").select("type").order("type")),
+    own(supabase.from("foiling_rates").select("color").order("color")),
+    own(supabase.from("uv_coating_rates").select("type,unit").order("type")),
+    own(supabase.from("relief_rates").select("type").order("type")),
+    own(supabase.from("foam_rates").select("type,thickness_mm,sheet_width_in,sheet_height_in").order("type").order("thickness_mm")),
+    own(supabase.from("reverse_board_rates").select("thickness_mm,sheet_width_in,sheet_height_in").order("thickness_mm")),
+    own(supabase.from("magnet_rates").select("diameter_mm,thickness_mm").order("diameter_mm").order("thickness_mm")),
+    own(supabase.from("washer_rates").select("name").order("name")),
+    own(supabase.from("ribbon_tag_rates").select("size_label").order("size_label")),
+    own(supabase.from("handle_rates").select("id,type,image_path").order("type")),
+    own(supabase.from("lock_rates").select("id,type,image_path").order("type")),
+    own(supabase.from("window_rates").select("id,name,image_path,film_width_in,film_height_in").order("name")),
+    own(supabase.from("labour_rates").select("name").order("name")),
     // Round 3: both tolerate a pre-migration-round3 DB (missing table/column).
-    supabase.from("misc_rates").select("id,name,unit,price").order("name"),
-    supabase.from("foiling_rates").select("finish").eq("finish", "matte").limit(1),
+    own(supabase.from("misc_rates").select("id,name,unit,price").order("name")),
+    own(supabase.from("foiling_rates").select("finish").eq("finish", "matte").limit(1)),
   ]);
 
   // whitePaper and artCard are deliberately NOT in this list: a live DB that
@@ -148,8 +161,8 @@ export async function loadRateOptions(
   // correctly yields an empty list.)
   const artCardRows: { type: string; size_label: string; gsm: number }[] = artCard.error
     ? await (async () => {
-        const legacy = await supabase
-          .from("art_card_rates").select("size_label,gsm").order("size_label").order("gsm");
+        const legacy = await own(supabase
+          .from("art_card_rates").select("size_label,gsm").order("size_label").order("gsm"));
         return legacy.error
           ? []
           : (legacy.data ?? []).map((r) => ({

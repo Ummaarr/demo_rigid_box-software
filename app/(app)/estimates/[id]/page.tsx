@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChevronLeft, FileDown, Layers, RefreshCw } from "lucide-react";
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadEstimateDetail } from "@/lib/db/estimates";
 import { recomputeMaterials } from "@/lib/estimate/build-estimate";
@@ -14,6 +14,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { FinishingRows, ResultPanel, type ResultCost } from "@/components/estimate/result-panel";
 import type { MaterialQuantities } from "@/lib/engines/material";
 import { formatMoney } from "@/lib/currency";
+import { currencyMetaFor } from "@/lib/currency-meta";
 
 const fmt = (s: string) =>
   new Date(s).toLocaleDateString("en-IN", {
@@ -24,7 +25,6 @@ const fmt = (s: string) =>
     minute: "2-digit",
   });
 
-const inr = formatMoney;
 
 function Row({
   label,
@@ -47,7 +47,16 @@ function Row({
   );
 }
 
-function CostBreakdownView({ cost, qty }: { cost: ResultCost; qty: number }) {
+function CostBreakdownView({
+  cost,
+  qty,
+  money: inr,
+}: {
+  cost: ResultCost;
+  qty: number;
+  /** Bound to this session's market by the page; see currencyMetaFor. */
+  money: (n: number) => string;
+}) {
   const acc = cost.accessories;
   return (
     <div className="flex flex-col gap-1.5 text-sm">
@@ -156,13 +165,19 @@ export default async function EstimateDetailPage({
   if (!session) redirect("/login");
 
   const { id } = await params;
-  const est = await loadEstimateDetail(createAdminClient(), id);
+  const est = await loadEstimateDetail(createAdminClient(), id, ownerScopeFor(session));
   if (!est) notFound();
 
+  // Server component — resolve the trial's market from the session directly.
+  // undefined keeps BRAND's dressing, i.e. admin/staff are unchanged.
+  const meta = currencyMetaFor(session);
+  const money = (n: number) => formatMoney(n, 2, meta);
+
   // Strip margin for staff at the API boundary (same as the calculate route).
+  // Trial accounts keep it — their own markup on their own private estimate.
   let cost: ResultCost | null = null;
   if (est.cost_breakdown) {
-    if (session.role === "admin") {
+    if (session.role === "admin" || session.role === "trial") {
       cost = est.cost_breakdown as ResultCost;
     } else {
       const { margin: _m, subtotalAfterMargin: _s, ...staffView } =
@@ -303,7 +318,7 @@ export default async function EstimateDetailPage({
             materials={materials}
             cost={cost}
             // Section-wise breakdown (client final doc item 11).
-            costView={buildCostView(specs, cost as CostBreakdown, materials)}
+            costView={buildCostView(specs, cost as CostBreakdown, materials, meta)}
             // Auto-printing picks (round 5) frozen in the rates snapshot.
             autoPicks={est.rates_snapshot?.autoPicks}
             additionalDetail={
@@ -320,7 +335,7 @@ export default async function EstimateDetailPage({
       ) : cost ? (
         <section className="rounded-lg border p-4">
           <h2 className="mb-3 font-medium text-sm">Cost breakdown</h2>
-          <CostBreakdownView cost={cost} qty={specs.quantity} />
+          <CostBreakdownView cost={cost} qty={specs.quantity} money={money} />
         </section>
       ) : (
         <p className="text-sm text-muted-foreground">

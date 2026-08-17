@@ -1,17 +1,25 @@
-// PATCH  /api/rates — admin-only rate field update (staff PROPOSE instead).
-// POST   /api/rates — new rate row insert: admin OR staff (client final doc,
-//        "Staff Access: should be able to add and delete materials").
-// DELETE /api/rates — rate row delete: admin OR staff (same ask).
+// PATCH  /api/rates — admin OR trial rate field update (staff PROPOSE instead).
+//        Admin edits the shared master card; a trial user edits only their
+//        own private clone (ownership checked in applyRateUpdate) — no
+//        propose/approve for trial, it's their own sandbox.
+// POST   /api/rates — new rate row insert: admin, staff, or trial (client
+//        final doc, "Staff Access: should be able to add and delete
+//        materials"; trial gets the same on their own private card).
+// DELETE /api/rates — rate row delete: admin/staff (shared rows) or trial
+//        (their own rows only).
 // All use a strict whitelist (lib/db/rate-whitelist.ts): only listed tables and
 // fields are allowed. The propose/approve workflow reuses the same whitelist.
 //
-// WHY add/delete are open to staff but PATCH is not: adding or removing a
-// catalogue row cannot change what an existing estimate costs (every estimate
-// carries its own rates_snapshot) and new rows land as is_dummy until priced.
-// EDITING a live rate silently moves the price of every future estimate, which
-// is exactly what the round-3 propose/approve workflow exists to gate.
+// WHY add/delete are open to staff but PATCH is not (on the SHARED master
+// card): adding or removing a catalogue row cannot change what an existing
+// estimate costs (every estimate carries its own rates_snapshot) and new rows
+// land as is_dummy until priced. EDITING a live shared rate silently moves the
+// price of every future estimate, which is exactly what the round-3
+// propose/approve workflow exists to gate. None of that applies to a trial
+// user's own private card — nothing else reads it — so trial edits directly.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
+import { currencyCodeFor } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
 import {
   ALLOWED,
@@ -21,14 +29,15 @@ import {
   normaliseRateValue,
 } from "@/lib/db/rate-whitelist";
 
-async function requireAdmin() {
+async function requireAdminOrTrial() {
   const session = await getSession();
   if (!session) return { error: Response.json({ error: "Not authenticated." }, { status: 401 }) };
-  if (session.role !== "admin") return { error: Response.json({ error: "Admin only." }, { status: 403 }) };
+  if (session.role !== "admin" && session.role !== "trial")
+    return { error: Response.json({ error: "Admin only." }, { status: 403 }) };
   return { session };
 }
 
-/** Any signed-in user (admin or staff) — used by the row add/delete routes. */
+/** Any signed-in user (admin, staff, or trial) — used by the row add/delete routes. */
 async function requireUser() {
   const session = await getSession();
   if (!session) return { error: Response.json({ error: "Not authenticated." }, { status: 401 }) };
@@ -36,7 +45,7 @@ async function requireUser() {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin();
+  const auth = await requireAdminOrTrial();
   if ("error" in auth) return auth.error;
 
   let body: { table?: string; id?: unknown; field?: string; value?: unknown };
@@ -54,6 +63,10 @@ export async function PATCH(request: Request) {
     return Response.json({ error: "field is required." }, { status: 400 });
   if (id == null || (typeof id !== "string" && typeof id !== "number"))
     return Response.json({ error: "id is required." }, { status: 400 });
+  // app_config is global formula config, admin-only — a trial user has no
+  // business editing it (their own sandbox never touches it).
+  if (table === "app_config" && auth.session.role !== "admin")
+    return Response.json({ error: "Admin only." }, { status: 403 });
 
   const result = await applyRateUpdate(
     createAdminClient(),
@@ -62,6 +75,7 @@ export async function PATCH(request: Request) {
     field,
     value,
     auth.session.fullName ?? auth.session.email ?? "Unknown",
+    { role: auth.session.role, userId: auth.session.userId },
   );
   if ("error" in result) {
     const status = result.error === "Failed to update rate." ? 500 : 400;
@@ -92,10 +106,20 @@ export async function POST(request: Request) {
   const allAllowed = new Set([...spec.required, ...spec.optional]);
   // Stamp who added the row + when (all insertable tables are rate tables, which
   // carry updated_by/updated_at). Vendor may still be overridden by `fields`.
+  // owner_id is ALWAYS derived server-side from the session, never trusted
+  // from the client — null for admin/staff (the shared master card), the
+  // caller's own id for trial (their own private card).
+  //
+  // currency likewise: a row a trial adds must join THEIR market's card, not
+  // the column's 'INR' default, or their new rate would be invisible to their
+  // own estimates. admin/staff resolve to INR, which is what the column would
+  // have defaulted to anyway.
   const newRow: Record<string, unknown> = {
     is_dummy: true,
     updated_by: auth.session.fullName ?? auth.session.email ?? "Unknown",
     updated_at: new Date().toISOString(),
+    owner_id: ownerScopeFor(auth.session),
+    currency: currencyCodeFor(auth.session),
   };
 
   // Validate required fields.
@@ -150,7 +174,25 @@ export async function DELETE(request: Request) {
     return Response.json({ error: "Invalid table for delete." }, { status: 400 });
   if (!id) return Response.json({ error: "id is required." }, { status: 400 });
 
-  const { error } = await createAdminClient().from(table).delete().eq("id", id);
+  const admin = createAdminClient();
+
+  // Ownership check (trial-role isolation): admin/staff may delete only a
+  // shared (owner_id null) row; a trial user only their own. "Not found" for
+  // a mismatch either way — an id you don't own should look like it doesn't
+  // exist, not like a permissions wall to probe.
+  const { data: existing, error: findErr } = await admin
+    .from(table)
+    .select("owner_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (findErr || !existing) return Response.json({ error: "Not found." }, { status: 404 });
+  const rowOwnerId = (existing as { owner_id: string | null }).owner_id;
+  const allowed =
+    ((auth.session.role === "admin" || auth.session.role === "staff") && rowOwnerId === null) ||
+    (auth.session.role === "trial" && rowOwnerId === auth.session.userId);
+  if (!allowed) return Response.json({ error: "Not found." }, { status: 404 });
+
+  const { error } = await admin.from(table).delete().eq("id", id);
   if (error) {
     console.error(`DELETE /api/rates (${table}):`, error);
     return Response.json({ error: "Failed to delete row." }, { status: 500 });

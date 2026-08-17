@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadClientsList } from "@/lib/db/clients-db";
 import Link from "next/link";
@@ -14,7 +14,7 @@ export default async function ClientsPage() {
   const session = await verifySession();
   if (!session) redirect("/login");
 
-  const clients = await loadClientsList(createAdminClient());
+  const clients = await loadClientsList(createAdminClient(), ownerScopeFor(session));
 
   return (
     <div className="flex flex-col gap-6 p-6">

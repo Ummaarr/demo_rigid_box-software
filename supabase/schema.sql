@@ -24,8 +24,40 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- v7 (trial-role): 'trial' = a short-lived lead-evaluation account, isolated
+-- to its own clients/estimates/quotes and its own private rate-card clone
+-- (see the owner_id additions below). Widen the CHECK by content, not by a
+-- guessed name (same technique as estimates_box_type_check further down).
+do $$
+declare c record;
+begin
+  for c in
+    select con.conname
+    from pg_constraint con
+    where con.conrelid = 'public.profiles'::regclass and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) like '%role%'
+  loop
+    execute format('alter table public.profiles drop constraint %I;', c.conname);
+  end loop;
+  alter table public.profiles add constraint profiles_role_check
+    check (role in ('admin', 'staff', 'trial'));
+end $$;
+
+-- Has this trial user acknowledged the "review your rates" banner? Only
+-- meaningful for role = 'trial'; unused by admin/staff.
+alter table public.profiles add column if not exists trial_rates_ack boolean not null default false;
+
+-- v8 (multi-currency): which market a trial user picked on first login — NULL
+-- means "hasn't picked yet" (they land on a blocking country-picker instead of
+-- the app, since there is no rate card to clone until this is set). Only
+-- meaningful for role = 'trial'; unused by admin/staff, who are always INR.
+-- Cannot be changed once set (see app/api/trial/set-currency) — same
+-- "delete and recreate instead" rule as role.
+alter table public.profiles add column if not exists trial_currency text
+  check (trial_currency in ('INR', 'USD', 'GBP', 'AED'));
+
 -- ===========================================================================
--- 2. Helper: is_admin() — used by RLS write policies.
+-- 2. Helpers: is_admin() / is_trial() — used by RLS policies.
 --    Defined AFTER profiles because a SQL function body is validated at
 --    creation time and references public.profiles.
 -- ===========================================================================
@@ -39,6 +71,19 @@ as $$
   select exists (
     select 1 from public.profiles
     where id = auth.uid() and role = 'admin'
+  );
+$$;
+
+create or replace function public.is_trial()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'trial'
   );
 $$;
 
@@ -111,9 +156,17 @@ create table if not exists public.art_card_rates (
 -- widening the key can never collide on live data.
 alter table public.art_card_rates add column if not exists type text not null default 'Art card';
 alter table public.art_card_rates drop constraint if exists art_card_rates_size_label_gsm_key;
+-- SKIPPED once v7 (owner_id) has run: v7 replaces this bare key with a pair of
+-- partial indexes, and re-adding it here on a re-run would abort the whole
+-- script the moment a trial user's clone shares a key with the master row.
 do $$
 begin
-  if not exists (select 1 from pg_constraint where conname = 'art_card_rates_type_size_label_gsm_key') then
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'art_card_rates' and column_name = 'owner_id'
+  ) and not exists (
+    select 1 from pg_constraint where conname = 'art_card_rates_type_size_label_gsm_key'
+  ) then
     alter table public.art_card_rates
       add constraint art_card_rates_type_size_label_gsm_key unique (type, size_label, gsm);
   end if;
@@ -186,13 +239,18 @@ create table if not exists public.foiling_rates (
 -- v5 (round 3): widen unique(color) -> unique(color, finish) on existing DBs.
 alter table public.foiling_rates add column if not exists finish text not null default 'glossy'
   check (finish in ('matte','glossy'));
+-- The add half is SKIPPED once v7 (owner_id) has run — see the note on the
+-- art_card_rates block above; v7 owns this table's uniqueness from then on.
 do $$
 begin
   if exists (select 1 from pg_constraint
              where conname = 'foiling_rates_color_key' and conrelid = 'public.foiling_rates'::regclass) then
     alter table public.foiling_rates drop constraint foiling_rates_color_key;
   end if;
-  if not exists (select 1 from pg_constraint
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'foiling_rates' and column_name = 'owner_id'
+  ) and not exists (select 1 from pg_constraint
                  where conname = 'foiling_rates_color_finish_key' and conrelid = 'public.foiling_rates'::regclass) then
     alter table public.foiling_rates add constraint foiling_rates_color_finish_key unique (color, finish);
   end if;
@@ -384,22 +442,222 @@ end $$;
 -- so each table also gets a PARTIAL index guaranteeing at most one such row
 -- per size — otherwise a vendor-less lookup (any pre-round-10 snapshot) could
 -- resolve arbitrarily. Kept in sync with supabase/migration-printing-vendor.sql.
+-- Both halves are SKIPPED once v7 (owner_id) has run — v7 replaces these keys
+-- with the full vendor x owner 2x2 index set below, and re-adding them on a
+-- re-run would abort the script once any trial clone exists.
 do $$
 begin
-  if not exists (select 1 from pg_constraint where conname = 'offset_printing_rates_size_colour_vendor_key') then
-    alter table public.offset_printing_rates
-      add constraint offset_printing_rates_size_colour_vendor_key unique (size_label, colour, vendor);
-  end if;
-  if not exists (select 1 from pg_constraint where conname = 'digital_printing_rates_size_vendor_key') then
-    alter table public.digital_printing_rates
-      add constraint digital_printing_rates_size_vendor_key unique (size_label, vendor);
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'offset_printing_rates' and column_name = 'owner_id'
+  ) then
+    if not exists (select 1 from pg_constraint where conname = 'offset_printing_rates_size_colour_vendor_key') then
+      alter table public.offset_printing_rates
+        add constraint offset_printing_rates_size_colour_vendor_key unique (size_label, colour, vendor);
+    end if;
+    if not exists (select 1 from pg_constraint where conname = 'digital_printing_rates_size_vendor_key') then
+      alter table public.digital_printing_rates
+        add constraint digital_printing_rates_size_vendor_key unique (size_label, vendor);
+    end if;
+    create unique index if not exists offset_printing_rates_size_colour_novendor_key
+      on public.offset_printing_rates (size_label, colour) where vendor is null;
+    create unique index if not exists digital_printing_rates_size_novendor_key
+      on public.digital_printing_rates (size_label) where vendor is null;
   end if;
 end $$;
 
-create unique index if not exists offset_printing_rates_size_colour_novendor_key
-  on public.offset_printing_rates (size_label, colour) where vendor is null;
-create unique index if not exists digital_printing_rates_size_novendor_key
-  on public.digital_printing_rates (size_label) where vendor is null;
+-- v7 (trial-role): owner_id scopes a rate row to NULL (the shared master
+-- card, used by admin/staff — unchanged behaviour) or a specific trial
+-- user's private clone. A plain composite unique(..., owner_id) would NOT
+-- stop two master rows sharing a key (SQL treats NULL <> NULL), so every
+-- natural key below is replaced with a pair of PARTIAL unique indexes —
+-- same reasoning as the vendor partial-index pair just above, generalised
+-- with a data-driven loop since the key differs per table. Kept in sync with
+-- supabase/migration-trial-role.sql.
+do $$
+declare
+  rec record;
+  con record;
+begin
+  for rec in
+    select * from (values
+      ('board_rates',         'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('paper_rates',         'size_label, gsm'),
+      ('white_paper_rates',   'size_label, gsm'),
+      ('art_card_rates',      'type, size_label, gsm'),
+      ('special_paper_rates', 'name, size_label'),
+      ('lamination_rates',    'type'),
+      ('foiling_rates',       'color, finish'),
+      ('uv_coating_rates',    'type'),
+      ('magnet_rates',        'diameter_mm, thickness_mm'),
+      ('washer_rates',        'name'),
+      ('foam_rates',          'type, thickness_mm'),
+      ('reverse_board_rates', 'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('consumable_rates',    'name'),
+      ('labour_rates',        'name'),
+      ('ribbon_tag_rates',    'size_label'),
+      ('relief_rates',        'type'),
+      ('handle_rates',        'type'),
+      ('lock_rates',          'type'),
+      ('window_rates',        'name'),
+      ('misc_rates',          'name')
+    ) as t(tbl, cols)
+  loop
+    execute format(
+      'alter table public.%I add column if not exists owner_id uuid references auth.users(id) on delete cascade;',
+      rec.tbl
+    );
+
+    -- Drop whatever UNIQUE constraint currently enforces the bare natural
+    -- key (auto-named or explicitly named) — it's about to be replaced.
+    -- Never touches the primary key (contype 'p', not 'u').
+    for con in
+      select conname from pg_constraint
+      where conrelid = ('public.' || rec.tbl)::regclass and contype = 'u'
+    loop
+      execute format('alter table public.%I drop constraint %I;', rec.tbl, con.conname);
+    end loop;
+
+    execute format(
+      'create unique index if not exists %I on public.%I (%s) where owner_id is null;',
+      rec.tbl || '_key_shared', rec.tbl, rec.cols
+    );
+    execute format(
+      'create unique index if not exists %I on public.%I (%s, owner_id) where owner_id is not null;',
+      rec.tbl || '_key_owned', rec.tbl, rec.cols
+    );
+  end loop;
+end $$;
+
+-- offset_printing_rates / digital_printing_rates have a SECOND nullable
+-- dimension (vendor) on top of owner_id, so they need the full 2x2
+-- combination instead of the generic 2-way split above.
+alter table public.offset_printing_rates add column if not exists owner_id uuid references auth.users(id) on delete cascade;
+alter table public.digital_printing_rates add column if not exists owner_id uuid references auth.users(id) on delete cascade;
+
+-- Drop EVERY unique constraint on these two tables, not just the round-10
+-- ones by name: depending on which migrations a database has seen it may also
+-- still carry the older auto-named `unique (size_label, colour)` /
+-- `unique (size_label)` keys. Leaving one behind silently blocks a trial
+-- user's clone (the second copy of each print size collides with it), which
+-- surfaces only as "Failed to set up the trial rate card".
+do $$
+declare con record;
+begin
+  for con in
+    select conrelid::regclass::text as tbl, conname
+    from pg_constraint
+    where conrelid in ('public.offset_printing_rates'::regclass,
+                       'public.digital_printing_rates'::regclass)
+      and contype = 'u'
+  loop
+    execute format('alter table %s drop constraint %I;', con.tbl, con.conname);
+  end loop;
+end $$;
+drop index if exists public.offset_printing_rates_size_colour_novendor_key;
+drop index if exists public.digital_printing_rates_size_novendor_key;
+
+create unique index if not exists offset_printing_rates_v_o_key
+  on public.offset_printing_rates (size_label, colour, vendor, owner_id)
+  where vendor is not null and owner_id is not null;
+create unique index if not exists offset_printing_rates_v_shared_key
+  on public.offset_printing_rates (size_label, colour, vendor)
+  where vendor is not null and owner_id is null;
+create unique index if not exists offset_printing_rates_novendor_owned_key
+  on public.offset_printing_rates (size_label, colour, owner_id)
+  where vendor is null and owner_id is not null;
+create unique index if not exists offset_printing_rates_novendor_shared_key
+  on public.offset_printing_rates (size_label, colour)
+  where vendor is null and owner_id is null;
+
+create unique index if not exists digital_printing_rates_v_o_key
+  on public.digital_printing_rates (size_label, vendor, owner_id)
+  where vendor is not null and owner_id is not null;
+create unique index if not exists digital_printing_rates_v_shared_key
+  on public.digital_printing_rates (size_label, vendor)
+  where vendor is not null and owner_id is null;
+create unique index if not exists digital_printing_rates_novendor_owned_key
+  on public.digital_printing_rates (size_label, owner_id)
+  where vendor is null and owner_id is not null;
+create unique index if not exists digital_printing_rates_novendor_shared_key
+  on public.digital_printing_rates (size_label)
+  where vendor is null and owner_id is null;
+
+-- v8 (multi-currency): currency scopes a rate row the same way owner_id scopes
+-- it by user. SHARED (owner_id is null) rows fork into four per-market
+-- template sets (INR/USD/GBP/AED) — a trial user's own clone only ever holds
+-- ONE currency's worth of rows (chosen once at first login, see
+-- app/api/trial/set-currency), so the _key_owned indexes from v7 need no
+-- change; only the _key_shared half of each pair gains currency. Every
+-- existing row defaults to 'INR', so admin/staff's real data and every
+-- already-provisioned INR trial clone are untouched. Same data-driven-loop
+-- technique as v7, over the same 20-table list. Kept in sync with
+-- supabase/migration-multi-currency.sql.
+do $$
+declare
+  rec record;
+begin
+  for rec in
+    select * from (values
+      ('board_rates',         'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('paper_rates',         'size_label, gsm'),
+      ('white_paper_rates',   'size_label, gsm'),
+      ('art_card_rates',      'type, size_label, gsm'),
+      ('special_paper_rates', 'name, size_label'),
+      ('lamination_rates',    'type'),
+      ('foiling_rates',       'color, finish'),
+      ('uv_coating_rates',    'type'),
+      ('magnet_rates',        'diameter_mm, thickness_mm'),
+      ('washer_rates',        'name'),
+      ('foam_rates',          'type, thickness_mm'),
+      ('reverse_board_rates', 'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('consumable_rates',    'name'),
+      ('labour_rates',        'name'),
+      ('ribbon_tag_rates',    'size_label'),
+      ('relief_rates',        'type'),
+      ('handle_rates',        'type'),
+      ('lock_rates',          'type'),
+      ('window_rates',        'name'),
+      ('misc_rates',          'name')
+    ) as t(tbl, cols)
+  loop
+    execute format(
+      $f$alter table public.%I add column if not exists currency text not null default 'INR' check (currency in ('INR','USD','GBP','AED'));$f$,
+      rec.tbl
+    );
+
+    execute format('drop index if exists public.%I;', rec.tbl || '_key_shared');
+    execute format(
+      'create unique index if not exists %I on public.%I (currency, %s) where owner_id is null;',
+      rec.tbl || '_key_shared', rec.tbl, rec.cols
+    );
+  end loop;
+end $$;
+
+-- offset_printing_rates / digital_printing_rates: currency joins the two
+-- SHARED variants of the vendor x owner 2x2 index set only (the ones with
+-- `where ... and owner_id is null`); the OWNED variants are untouched.
+alter table public.offset_printing_rates add column if not exists currency text not null default 'INR' check (currency in ('INR','USD','GBP','AED'));
+alter table public.digital_printing_rates add column if not exists currency text not null default 'INR' check (currency in ('INR','USD','GBP','AED'));
+
+drop index if exists public.offset_printing_rates_v_shared_key;
+drop index if exists public.offset_printing_rates_novendor_shared_key;
+drop index if exists public.digital_printing_rates_v_shared_key;
+drop index if exists public.digital_printing_rates_novendor_shared_key;
+
+create unique index if not exists offset_printing_rates_v_shared_key
+  on public.offset_printing_rates (currency, size_label, colour, vendor)
+  where vendor is not null and owner_id is null;
+create unique index if not exists offset_printing_rates_novendor_shared_key
+  on public.offset_printing_rates (currency, size_label, colour)
+  where vendor is null and owner_id is null;
+
+create unique index if not exists digital_printing_rates_v_shared_key
+  on public.digital_printing_rates (currency, size_label, vendor)
+  where vendor is not null and owner_id is null;
+create unique index if not exists digital_printing_rates_novendor_shared_key
+  on public.digital_printing_rates (currency, size_label)
+  where vendor is null and owner_id is null;
 
 -- ===========================================================================
 -- 4. Config tables
@@ -424,6 +682,34 @@ create table if not exists public.margin_config (
   is_dummy    boolean not null default true,
   updated_at  timestamptz not null default now()
 );
+
+-- v7 (trial-role): a trial user gets their own private margin_config clone
+-- (their margin is just their own markup input on their own estimate, not
+-- the company's real default). `key` alone can no longer be the primary key
+-- once master + per-owner rows may share the same key value — id becomes the
+-- real PK; key stays unique WITHIN an owner scope via the same partial-index
+-- pattern used for the rate tables above.
+alter table public.margin_config add column if not exists id uuid not null default gen_random_uuid();
+alter table public.margin_config add column if not exists owner_id uuid references auth.users(id) on delete cascade;
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'margin_config_pkey' and conrelid = 'public.margin_config'::regclass and contype = 'p'
+  ) then
+    alter table public.margin_config drop constraint margin_config_pkey;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'margin_config_id_pkey' and conrelid = 'public.margin_config'::regclass and contype = 'p'
+  ) then
+    alter table public.margin_config add constraint margin_config_id_pkey primary key (id);
+  end if;
+end $$;
+create unique index if not exists margin_config_key_shared_key
+  on public.margin_config (key) where owner_id is null;
+create unique index if not exists margin_config_key_owned_key
+  on public.margin_config (key, owner_id) where owner_id is not null;
 
 -- ===========================================================================
 -- 5. Core entities
@@ -511,6 +797,13 @@ create table if not exists public.quotes (
   created_at           timestamptz not null default now()
 );
 
+-- v8 (multi-currency): which market this quote was priced in, frozen with the
+-- rest of the snapshot so re-rendering its PDF years later still prints the
+-- right symbol. NULL = issued before multi-currency, or by admin/staff, both
+-- of which render with the deployment's own BRAND dressing.
+alter table public.quotes add column if not exists currency text
+  check (currency in ('INR', 'USD', 'GBP', 'AED'));
+
 -- One counter row per Indian financial year (label like '26-27'); the function
 -- increments atomically so concurrent quote saves can never collide.
 create table if not exists public.quote_counters (
@@ -560,8 +853,11 @@ create policy "Users can read own profile"
   on public.profiles for select to authenticated
   using (auth.uid() = id);
 
--- Rate + app_config tables: authenticated can READ; only admins can WRITE.
--- Applied in a loop to keep the policy identical and DRY across every table.
+-- Rate tables: authenticated can READ shared (owner_id is null) or their OWN
+-- (owner_id = auth.uid()) rows; admins can write shared rows, a user can
+-- write only rows they own. Applied in a loop to keep the policy identical
+-- and DRY across every table. app_config is handled separately below — it
+-- has no owner concept and stays global.
 do $$
 declare t text;
 begin
@@ -570,28 +866,45 @@ begin
     'digital_printing_rates','lamination_rates','foiling_rates','uv_coating_rates',
     'relief_rates','magnet_rates','washer_rates','ribbon_tag_rates','foam_rates',
     'reverse_board_rates','consumable_rates','labour_rates',
-    'handle_rates','lock_rates','window_rates','misc_rates','app_config'
+    'handle_rates','lock_rates','window_rates','misc_rates'
   ]
   loop
     execute format('alter table public.%I enable row level security;', t);
     execute format('drop policy if exists "read for authenticated" on public.%I;', t);
-    execute format('create policy "read for authenticated" on public.%I for select to authenticated using (true);', t);
+    execute format('drop policy if exists "read own or shared" on public.%I;', t);
+    execute format('create policy "read own or shared" on public.%I for select to authenticated using (owner_id is null or owner_id = auth.uid());', t);
     execute format('drop policy if exists "admin write" on public.%I;', t);
-    execute format('create policy "admin write" on public.%I for all to authenticated using (public.is_admin()) with check (public.is_admin());', t);
+    execute format('drop policy if exists "owner or admin write" on public.%I;', t);
+    execute format('create policy "owner or admin write" on public.%I for all to authenticated using (public.is_admin() or owner_id = auth.uid()) with check (public.is_admin() or owner_id = auth.uid());', t);
   end loop;
 end $$;
 
--- margin_config: admins only — for read AND write.
+-- app_config: unchanged — global formula config (folding allowance, wastage
+-- %, etc.), no owner concept, every role reads the same values.
+alter table public.app_config enable row level security;
+drop policy if exists "read for authenticated" on public.app_config;
+create policy "read for authenticated" on public.app_config for select to authenticated using (true);
+drop policy if exists "admin write" on public.app_config;
+create policy "admin write" on public.app_config for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- margin_config: admin reads/writes the shared master row; a trial user
+-- reads/writes only their own owned row. Staff match neither branch, so they
+-- still see nothing (unchanged).
 alter table public.margin_config enable row level security;
 drop policy if exists "admin only" on public.margin_config;
-create policy "admin only"
+drop policy if exists "admin or owner" on public.margin_config;
+create policy "admin or owner"
   on public.margin_config for all to authenticated
-  using (public.is_admin()) with check (public.is_admin());
+  using (public.is_admin() or owner_id = auth.uid())
+  with check (public.is_admin() or owner_id = auth.uid());
 
 -- clients: authenticated can read + create + update; only admins delete.
+-- A trial account only ever reads rows IT created; admin/staff still read
+-- everything (support visibility / shared internal use, unchanged).
 alter table public.clients enable row level security;
 drop policy if exists "read clients" on public.clients;
-create policy "read clients" on public.clients for select to authenticated using (true);
+create policy "read clients" on public.clients for select to authenticated
+  using (not public.is_trial() or created_by = auth.uid());
 drop policy if exists "create clients" on public.clients;
 create policy "create clients" on public.clients for insert to authenticated with check (true);
 drop policy if exists "update clients" on public.clients;
@@ -601,10 +914,11 @@ create policy "admin delete clients" on public.clients for delete to authenticat
 
 -- estimates: authenticated can read + create; snapshots are immutable but the
 -- STATUS column is updatable (round 3) — the API routes only ever update status.
--- Only admins may delete.
+-- Only admins may delete. Same trial-scoped read as clients, above.
 alter table public.estimates enable row level security;
 drop policy if exists "read estimates" on public.estimates;
-create policy "read estimates" on public.estimates for select to authenticated using (true);
+create policy "read estimates" on public.estimates for select to authenticated
+  using (not public.is_trial() or created_by = auth.uid());
 drop policy if exists "create estimates" on public.estimates;
 create policy "create estimates" on public.estimates for insert to authenticated with check (true);
 drop policy if exists "update estimate status" on public.estimates;
@@ -614,9 +928,11 @@ drop policy if exists "admin delete estimates" on public.estimates;
 create policy "admin delete estimates" on public.estimates for delete to authenticated using (public.is_admin());
 
 -- quotes: authenticated read + create + update (status); only admins delete.
+-- Same trial-scoped read as clients/estimates, above.
 alter table public.quotes enable row level security;
 drop policy if exists "read quotes" on public.quotes;
-create policy "read quotes" on public.quotes for select to authenticated using (true);
+create policy "read quotes" on public.quotes for select to authenticated
+  using (not public.is_trial() or created_by = auth.uid());
 drop policy if exists "create quotes" on public.quotes;
 create policy "create quotes" on public.quotes for insert to authenticated with check (true);
 drop policy if exists "update quotes" on public.quotes;

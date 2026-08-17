@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { ReceiptText } from "lucide-react";
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadQuotesList } from "@/lib/db/quotes";
 import { QuotesList } from "@/components/quotes/quotes-list";
@@ -14,8 +14,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
 
 export default async function QuotesPage() {
-  await verifySession();
-  const quotes = await loadQuotesList(createAdminClient());
+  const session = await verifySession();
+  const quotes = await loadQuotesList(createAdminClient(), ownerScopeFor(session));
 
   return (
     <div className="flex flex-col gap-6 p-6">

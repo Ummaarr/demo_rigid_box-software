@@ -1,16 +1,25 @@
 "use client";
 
-// Estimates table (round 3 — client 8-Jul column list): Name, client, box
+// Estimates grid (round 3 — client 8-Jul column list): name, client, box
 // type, qty, price, total, date, created by, status (inline dropdown), plus
-// admin-only delete. Status 'revised' is also set automatically when a re-run
-// of the estimate is saved.
+// delete for admin and trial accounts. Status 'revised' is also set
+// automatically when a re-run of the estimate is saved.
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { ArrowRight, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   FilterActions,
   FilterBar,
@@ -27,7 +36,7 @@ import { boxLabel } from "@/lib/box-types";
 import { BOX_LABELS } from "@/lib/box-types";
 import { inDateRange, localDateKey } from "@/lib/utils";
 import type { BoxType, UserRole } from "@/types";
-import { formatMoney } from "@/lib/currency";
+import { useMoneyFormatter } from "@/lib/currency-context";
 
 const STATUSES = ["draft", "sent", "accepted", "revised"] as const;
 
@@ -73,7 +82,6 @@ function activeCountOf(f: EstimateFilters): number {
   );
 }
 
-const inr = (n: number | null) => (n == null ? "—" : formatMoney(n));
 
 const fmtDate = (s: string) =>
   new Date(s).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -85,8 +93,12 @@ export function EstimatesList({
   estimates: EstimateListItem[];
   role?: UserRole | null;
 }) {
+  const money = useMoneyFormatter();
+  const inr = (n: number | null) => (n == null ? "—" : money(n));
   const router = useRouter();
-  const isAdmin = role === "admin";
+  // Trial accounts can delete their OWN estimates (everything they see here
+  // is theirs); the API enforces that scope independently.
+  const canDelete = role === "admin" || role === "trial";
   const [filters, setFilters] = useState<EstimateFilters>(EMPTY_FILTERS);
   const [panelOpen, setPanelOpen] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, string>>({});
@@ -279,46 +291,26 @@ export function EstimatesList({
       {filtered.length === 0 ? (
         <p className="text-sm text-muted-foreground">No estimates match.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40">
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Client</th>
-                <th className="px-4 py-3 font-medium">Box type</th>
-                <th className="px-4 py-3 text-right font-medium">Qty</th>
-                <th className="px-4 py-3 text-right font-medium">Price / box</th>
-                <th className="px-4 py-3 text-right font-medium">Total</th>
-                <th className="px-4 py-3 font-medium">Date</th>
-                <th className="px-4 py-3 font-medium">By</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((e) => (
-                <tr key={e.id} className="border-t transition-colors hover:bg-muted/20">
-                  <td className="max-w-44 truncate px-4 py-3 font-medium">
-                    {e.name || <span className="font-normal text-muted-foreground">—</span>}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{e.client_name ?? "—"}</td>
-                  <td className="px-4 py-3">{boxLabel(e.box_type)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    {e.quantity.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums">{inr(e.price_per_box)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{inr(e.total_price)}</td>
-                  <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                    {fmtDate(e.created_at)}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {e.created_by_name ?? "—"}
-                  </td>
-                  <td className="px-4 py-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((e) => {
+            const label = e.name || boxLabel(e.box_type);
+            return (
+              <Card
+                key={e.id}
+                className="transition-shadow duration-200 hover:shadow-[0_4px_10px_-2px_rgba(0,0,0,0.1),0_18px_30px_-10px_rgba(0,0,0,0.18)] dark:hover:shadow-[0_4px_10px_-2px_rgba(0,0,0,0.4),0_18px_30px_-10px_rgba(0,0,0,0.6)]"
+              >
+                <CardHeader>
+                  <CardTitle className="truncate" title={label}>
+                    {label}
+                  </CardTitle>
+                  <CardDescription className="truncate">
+                    {e.client_name ?? "No client"} · {boxLabel(e.box_type)}
+                  </CardDescription>
+                  <CardAction>
                     {e.status != null ? (
                       <NativeSelect
                         aria-label="Estimate status"
-                        className={`h-8 w-28 text-xs capitalize ${STATUS_STYLES[statuses[e.id] ?? e.status] ?? ""}`}
+                        className={`h-7 w-[6.5rem] text-xs capitalize ${STATUS_STYLES[statuses[e.id] ?? e.status] ?? ""}`}
                         value={statuses[e.id] ?? e.status}
                         onChange={(ev) => setStatus(e.id, ev.target.value)}
                       >
@@ -329,33 +321,53 @@ export function EstimatesList({
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right">
-                    <span className="inline-flex items-center gap-2">
-                      <Link
-                        href={`/estimates/${e.id}`}
-                        className="text-xs text-primary underline-offset-2 hover:underline"
-                      >
-                        View
-                      </Link>
-                      {isAdmin && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-muted-foreground/60 hover:text-destructive"
-                          disabled={busy}
-                          onClick={() => void deleteEstimate(e)}
-                          title="Delete estimate"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </CardAction>
+                </CardHeader>
+
+                <CardContent className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                  <span className="text-muted-foreground">Qty</span>
+                  <span className="text-right tabular-nums">
+                    {e.quantity.toLocaleString()}
+                  </span>
+                  <span className="text-muted-foreground">Price / box</span>
+                  <span className="text-right tabular-nums">{inr(e.price_per_box)}</span>
+                  <span className="text-muted-foreground">Total</span>
+                  <span className="text-right font-medium tabular-nums">
+                    {inr(e.total_price)}
+                  </span>
+                  <span className="text-muted-foreground">Date</span>
+                  <span className="whitespace-nowrap text-right">{fmtDate(e.created_at)}</span>
+                  <span className="text-muted-foreground">By</span>
+                  <span className="truncate text-right">{e.created_by_name ?? "—"}</span>
+                </CardContent>
+
+                <CardFooter className="justify-between gap-2">
+                  <Link
+                    href={`/estimates/${e.id}`}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    View details
+                    <ArrowRight className="h-3 w-3" />
+                  </Link>
+                  {canDelete && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      // Visible hit target stays icon-sm (28px); the pseudo-element
+                      // extends the actual clickable/tappable area to 40x40.
+                      className="relative text-muted-foreground/60 before:absolute before:-inset-1.5 before:content-[''] hover:bg-destructive/10 hover:text-destructive"
+                      disabled={busy}
+                      onClick={() => void deleteEstimate(e)}
+                      aria-label={`Delete estimate ${label}`}
+                      title="Delete estimate"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </CardFooter>
+              </Card>
+            );
+          })}
         </div>
       )}
       {filtered.length !== estimates.length && (

@@ -17,7 +17,8 @@
 //
 // Auth required; uses the session user's name as "Prepared By".
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
+import { currencyCodeFor } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
 import {
   buildMultiQuotationData,
@@ -66,8 +67,11 @@ export async function POST(request: Request) {
   try {
     const admin = createAdminClient();
 
+    // A trial's quote is priced and taxed in their own market; admin/staff
+    // resolve to INR, i.e. unchanged.
+    const currency = currencyCodeFor(session);
     const data = draft
-      ? finalizeQuoteDraft(draft, session.fullName ?? "—", body.clientId ?? null)
+      ? finalizeQuoteDraft(draft, session.fullName ?? "—", body.clientId ?? null, currency)
       : await buildMultiQuotationData(
           admin,
           estimateIds,
@@ -75,6 +79,8 @@ export async function POST(request: Request) {
           body.clientId,
           body.overrides,
           body.terms,
+          ownerScopeFor(session),
+          currency,
         );
 
     if (!data) {

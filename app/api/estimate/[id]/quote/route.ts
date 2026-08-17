@@ -3,7 +3,8 @@
 // also assigns a real FY-sequence quote number and saves the quote row, so
 // single-estimate quotes are tracked exactly like builder quotes.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
+import { currencyCodeFor } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
 import { buildQuotationData } from "@/lib/pdf/quotation-data";
 import { issueQuote, quoteFilename } from "@/lib/pdf/generate-quote";
@@ -24,7 +25,13 @@ export async function GET(
 
   try {
     const admin = createAdminClient();
-    const data = await buildQuotationData(admin, id, session.fullName ?? "—");
+    const data = await buildQuotationData(
+      admin,
+      id,
+      session.fullName ?? "—",
+      ownerScopeFor(session),
+      currencyCodeFor(session),
+    );
     if (!data) {
       return Response.json({ error: "Estimate not found." }, { status: 404 });
     }

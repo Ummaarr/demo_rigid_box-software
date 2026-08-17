@@ -4,7 +4,7 @@
 // is reproducible and never changes when rates are later edited. The RESPONSE
 // still strips margin for non-admin callers.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
 import { buildEstimate, costForRole } from "@/lib/estimate/build-estimate";
 import { isEstimateError } from "@/lib/estimate/errors";
 import { createAdminClient } from "@/lib/db/admin";
@@ -23,16 +23,17 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  // Only admins may override overhead/margin; ignore them otherwise.
-  if (session.role !== "admin") {
+  // Only admins and trial accounts (their own margin, on their own private
+  // estimate) may override overhead/margin; ignore it otherwise.
+  if (session.role !== "admin" && session.role !== "trial") {
     delete body.overheadPct;
     delete body.marginPct;
   }
 
   try {
-    const built = await buildEstimate(body);
-
     const admin = createAdminClient();
+    const built = await buildEstimate(body, admin, ownerScopeFor(session));
+
     const baseRow = {
       client_id: body.clientId ?? null,
       box_type: body.boxType,
@@ -67,11 +68,15 @@ export async function POST(request: Request) {
     // Re-run provenance (client 8-Jul: status "revised (if price is rerun)"):
     // saving an estimate created via /estimate?from=<id> marks the source as
     // revised. Best-effort — never fails the save.
+    // Scoped for trial accounts: the source id comes from the request body, so
+    // without this a lead could flip another lead's estimate to "revised".
     if (typeof body.sourceEstimateId === "string" && body.sourceEstimateId) {
-      const { error: revErr } = await admin
+      const scope = ownerScopeFor(session);
+      const upd = admin
         .from("estimates")
         .update({ status: "revised" })
         .eq("id", body.sourceEstimateId);
+      const { error: revErr } = await (scope == null ? upd : upd.eq("created_by", scope));
       if (revErr && revErr.code !== "42703") {
         console.warn("mark-revised failed:", revErr.message);
       }

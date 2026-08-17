@@ -37,8 +37,8 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
-  --color-gold: var(--gold);
-  --color-gold-foreground: var(--gold-foreground);
+  --color-clay: var(--clay);
+  --color-clay-foreground: var(--clay-foreground);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -53,31 +53,41 @@
 }
 
 :root {
-  /* Surface/neutral values mirror efferd's base-nova demo theme EXACTLY
-     (off-white page, white cards popping via ring, #dedede borders) so our
-     efferd blocks render like their previews. Brand accents stay ours. */
-  --background: #fafafa;
+  /* Surface/neutral values STARTED as efferd's base-nova demo theme (off-white
+     page, white cards popping via ring, #dedede borders) so efferd blocks
+     render close to their previews — but the greys have since been warmed and
+     no longer match it exactly. Brand accents were always ours.
+
+     Warm neutral base. Every grey surface below carries a few units more red
+     than blue (#faf9f7 is 250/249/247) so the app reads as paper rather than
+     screen-grey, which also flatters the navy. Cards and popovers stay pure
+     white so they still separate from the page. Foreground text, the brand
+     colours and the charts are deliberately NOT warmed — tinting text is what
+     makes this kind of palette look muddy. */
+  --background: #faf9f7;
   --foreground: #060606;
   --card: #ffffff;
   --card-foreground: #060606;
   --popover: #ffffff;
   --popover-foreground: #060606;
 
-  /* Brand palette. Minimal + professional — navy is the SINGLE accent on
-     neutral greys; gold is reserved for the logo / rare highlights only (the
-     --gold token), never spread across the UI chrome.
-     NOTE: these two hexes are also hardcoded in components/pdf/
-     quotation-document.tsx and materials-document.tsx — rebranding the colours
-     means changing all three. */
-  --primary: #1f2a5c; /* navy */
+  /* Brand palette: WARM ESPRESSO + CLAY. A brown-black rather than a neutral
+     ink, so the chrome sits in the same warm family as the paper-toned page
+     instead of reading as cold grey. --clay is the single accent and is used
+     sparingly: the logo dot, the admin badge, and — load-bearing — the ROTATED
+     pieces in the nesting diagrams, where it has to stay clearly separable
+     from --primary. Two hues do that job better than two greys did.
+     NOTE: both hexes are also hardcoded in components/pdf/*.tsx and
+     lib/pdf/materials-data.ts — see the note in lib/pdf/CLAUDE.md. */
+  --primary: #33261c; /* warm espresso */
   --primary-foreground: #ffffff;
-  --gold: #c6a24c; /* gold — sparing use only (logo, small accents) */
-  --gold-foreground: #1f2a5c;
-  --secondary: #eeeeee; /* neutral grey */
+  --clay: #b4552d; /* clay — sparing use only (logo, badges, rotated pieces) */
+  --clay-foreground: #ffffff;
+  --secondary: #eeedea; /* warm neutral */
   --secondary-foreground: #171717;
-  --muted: #eeeeee;
-  --muted-foreground: #737373;
-  --accent: #eeeeee; /* neutral grey hover surfaces */
+  --muted: #eeedea;
+  --muted-foreground: #75736e;
+  --accent: #eeedea; /* warm neutral hover surfaces */
   --accent-foreground: #171717;
   --destructive: #e40014;
   /* Success — the counterpart to --destructive. Before this existed, every
@@ -85,23 +95,34 @@
      primary), which is why they never looked like one system. */
   --success: #047857;
   --success-foreground: #ffffff;
-  --border: #dedede;
-  --input: #e4e4e4;
-  --ring: #1f2a5c; /* navy focus ring */
-  --chart-1: #1f2a5c; /* navy */
+  --border: #deddd9;
+  --input: #e4e3df;
+  --ring: #33261c; /* espresso focus ring */
+  --chart-1: #33261c; /* espresso (charts run a warm ramp from here) */
   --chart-2: oklch(0.556 0 0); /* neutral (charts stay restrained) */
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.65rem;
-  --sidebar: #fafafa;
+  --sidebar: #faf9f7;
   --sidebar-foreground: #060606;
-  --sidebar-primary: #1f2a5c;
+  --sidebar-primary: #33261c;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eeeeee;
+  --sidebar-accent: #eeedea;
   --sidebar-accent-foreground: #171717;
-  --sidebar-border: #e5e5e5;
-  --sidebar-ring: #1f2a5c;
+  --sidebar-border: #e5e4e0;
+  --sidebar-ring: #33261c;
+
+  /* Shadow-as-border (make-interfaces-feel-better skill) — three layers: a 1px
+     ring, a tight lift, then ambient depth. Used instead of a solid `border`
+     on raised surfaces (choice cards, elevated buttons) so they sit correctly
+     on any background. NOT for dividers, which stay real borders. */
+  --shadow-border:
+    0px 0px 0px 1px rgba(0, 0, 0, 0.06), 0px 1px 2px -1px rgba(0, 0, 0, 0.06),
+    0px 2px 4px 0px rgba(0, 0, 0, 0.04);
+  --shadow-border-hover:
+    0px 0px 0px 1px rgba(0, 0, 0, 0.08), 0px 1px 2px -1px rgba(0, 0, 0, 0.08),
+    0px 2px 4px 0px rgba(0, 0, 0, 0.06);
 
   /* Motion tokens (transitions-dev skill) — menu-dropdown transition, shared
      by DropdownMenu and Select popups. Scale values (0.97 open / 0.99 close)
@@ -118,6 +139,24 @@
      layout state changes (e.g. search inputs expanding on focus). */
   --resize-dur: 300ms;
   --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Texts reveal (transitions-dev) — staggered blurred rise for a stacked
+     headline + supporting line. Used by the trial onboarding steps. */
+  --stagger-dur: 500ms;
+  --stagger-distance: 12px;
+  --stagger-stagger: 40ms;
+  --stagger-blur: 3px;
+  --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Error state shake (transitions-dev) — percussive "that failed" hint on
+     the onboarding error strip. The auto-revert half of the snippet is
+     deliberately unused: React owns when the message is present. */
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --revert-dur: 280ms;
 
   /* Panel reveal (rate-card filter panel) — expand/collapse to content height. */
   --reveal-dur: 260ms;
@@ -144,24 +183,26 @@
 }
 
 .dark {
-  /* Dark surfaces mirror efferd's base-nova dark theme exactly. */
-  --background: #030303;
+  /* Dark surfaces follow efferd's base-nova theme, lifted off pure black and
+     carrying the same warm bias as light mode (a touch more red than blue). */
+  --background: #0b0b0a;
   --foreground: #fcfcfc;
-  --card: #0d0d0d;
+  --card: #141413;
   --card-foreground: #fcfcfc;
-  --popover: #0d0d0d;
+  --popover: #141413;
   --popover-foreground: #fcfcfc;
-  /* Brand (dark): keep it clean/neutral. Navy is too dark on a dark surface, so
-     dark mode uses a light neutral primary; gold stays a sparing accent token. */
-  --primary: #fcfcfc;
-  --primary-foreground: #0d0d0d;
-  --gold: #c6a24c;
-  --gold-foreground: #1f2a5c;
-  --secondary: #222222;
+  /* Brand (dark): the warm family inverted — a warm off-white primary on the
+     near-black surfaces, with the clay accent lifted so it still reads against
+     a dark ground. */
+  --primary: #f7f3ee;
+  --primary-foreground: #241a13;
+  --clay: #d2764a;
+  --clay-foreground: #241a13;
+  --secondary: #232320;
   --secondary-foreground: #fcfcfc;
-  --muted: #222222;
-  --muted-foreground: #a1a1a1;
-  --accent: #222222;
+  --muted: #232320;
+  --muted-foreground: #a3a09b;
+  --accent: #232320;
   --accent-foreground: #fcfcfc;
   --destructive: #ff6568;
   --success: #34d399;
@@ -174,14 +215,19 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: #171717;
+  --sidebar: #191918;
   --sidebar-foreground: #fcfcfc;
   --sidebar-primary: #fcfcfc;
   --sidebar-primary-foreground: #0d0d0d;
-  --sidebar-accent: #262626;
+  --sidebar-accent: #272724;
   --sidebar-accent-foreground: #fcfcfc;
   --sidebar-border: #ffffff1a;
   --sidebar-ring: #737373;
+
+  /* Dark mode collapses to a single white ring — layered depth shadows are
+     invisible against a near-black background. */
+  --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.13);
 }
 
 @layer base {
@@ -193,6 +239,13 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Balanced heading line breaks + orphan-free body copy, site-wide. */
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
   }
 }
 
@@ -288,5 +341,125 @@
 @media (prefers-reduced-motion: reduce) {
   .t-resize {
     transition: none !important;
+  }
+}
+
+/* Texts reveal (transitions-dev) — lines start translated down + blurred +
+   invisible; .is-shown on the parent flips them to their resting state. The
+   later lines' transition-delay holds them back so the eye lands on the
+   headline first. */
+.t-stagger-line {
+  display: block;
+  opacity: 0;
+  transform: translateY(var(--stagger-distance));
+  filter: blur(var(--stagger-blur));
+  transition:
+    opacity var(--stagger-dur) var(--stagger-ease),
+    transform var(--stagger-dur) var(--stagger-ease),
+    filter var(--stagger-dur) var(--stagger-ease);
+  will-change: transform, opacity, filter;
+}
+.t-stagger-line--2 {
+  transition-delay: var(--stagger-stagger);
+}
+.t-stagger-line--3 {
+  transition-delay: calc(var(--stagger-stagger) * 2);
+}
+.t-stagger-line--4 {
+  transition-delay: calc(var(--stagger-stagger) * 3);
+}
+.t-stagger-line--5 {
+  transition-delay: calc(var(--stagger-stagger) * 4);
+}
+.t-stagger-line--6 {
+  transition-delay: calc(var(--stagger-stagger) * 5);
+}
+
+.t-stagger.is-shown .t-stagger-line {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+}
+/* Exit decouples from the stagger: same fade for every line, no Y return,
+   no blur — so the disappearance reads as a single quiet fade instead of a
+   reverse reveal. */
+.t-stagger.is-hiding .t-stagger-line {
+  opacity: 0;
+  transform: translateY(0);
+  filter: blur(0);
+  transition:
+    opacity 200ms ease,
+    transform 0s linear,
+    filter 0s linear;
+  transition-delay: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-stagger-line {
+    transition: none !important;
+  }
+}
+
+/* Error state shake (transitions-dev). Only the shake + message-reveal half
+   of the snippet is wired: the auto-revert timer is omitted on purpose, since
+   the message is React-owned and clears on the next submit rather than on a
+   hold timer. Border colour still tweens on the same revert duration. */
+.t-input {
+  transition: border-color 150ms ease-out;
+  will-change: transform;
+}
+.t-input.is-error {
+  transition: border-color var(--revert-dur, 280ms) ease-out;
+}
+
+.t-error-msg {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear var(--revert-dur, 280ms);
+}
+.t-input-wrap.is-error .t-error-msg {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear 0s;
+}
+
+/* Multi-segment keyframe with per-stop easing so each leg of the shake
+   follows its own cubic-bezier independently. %-stops are cumulative
+   durations as a fraction of the total (80, 60, 80, 60 = 280ms). Recompute
+   if any segment duration changes. */
+.t-input.is-shaking {
+  animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2)
+    linear;
+}
+@keyframes t-input-shake {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: var(--shake-ease);
+  }
+  28.57% {
+    transform: translateX(var(--shake-distance));
+    animation-timing-function: var(--shake-ease);
+  }
+  57.14% {
+    transform: translateX(calc(var(--shake-distance) * -1));
+    animation-timing-function: var(--shake-ease);
+  }
+  78.57% {
+    transform: translateX(var(--shake-overshoot));
+    animation-timing-function: var(--shake-ease);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-input {
+    animation: none !important;
+    transform: none !important;
   }
 }

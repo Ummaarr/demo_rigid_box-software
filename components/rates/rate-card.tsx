@@ -38,7 +38,7 @@ export function RateCard({
   role,
 }: {
   sections: SectionDef[];
-  role: "admin" | "staff" | null;
+  role: "admin" | "staff" | "trial" | null;
 }) {
   const [filters, setFilters] = useState<RateFilters>(EMPTY_FILTERS);
   const [open, setOpen] = useState(false);

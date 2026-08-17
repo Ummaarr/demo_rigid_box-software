@@ -2,6 +2,21 @@
 -- Run AFTER schema.sql, in the Supabase dashboard SQL editor. Idempotent
 -- (on conflict do nothing) so re-running never overwrites rates you've edited.
 --
+-- EVERY rate row seeded here is a SHARED master row (owner_id null) — the card
+-- admin and staff use, and the one a new trial account's private clone is
+-- copied from. Each `on conflict` therefore restates `where owner_id is null`:
+-- schema.sql's v7 block replaced the plain unique keys with PARTIAL indexes,
+-- and Postgres only matches a partial index when the statement repeats its
+-- predicate. Dropping that clause makes the insert fail outright, so keep it
+-- on any new rate-table insert added below.
+--
+-- v8 (multi-currency) added `currency` as the FIRST column of every shared
+-- partial index, so each target below also leads with `currency`. These rows
+-- omit the column and take its 'INR' default: this file seeds the INR market
+-- only. USD/GBP/AED template sets live in seed-currency-templates.sql, run
+-- after this one. app_config and margin_config are currency-agnostic
+-- (percentages and formula constants) and keep their original targets.
+--
 -- EVERY rate below is an INVENTED PLACEHOLDER. None of it is real commercial
 -- pricing. The numbers are internally consistent and plausible so the engine
 -- produces sensible output out of the box, but all of them should be replaced
@@ -23,7 +38,7 @@ insert into public.board_rates (thickness_mm, cost_per_sheet, is_dummy) values
   (2.0, 40.00, true),
   (2.5, 50.00, true),
   (3.0, 60.00, true)
-on conflict (thickness_mm, sheet_width_in, sheet_height_in) do nothing;
+on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Printed paper stock — DUMMY (sizes 23x36, 25x36, 30x40 at 120/130/157/170 GSM)
@@ -41,7 +56,7 @@ insert into public.paper_rates (size_label, width_in, height_in, gsm, cost_per_s
   ('30x40', 30, 40, 130, 13, true),
   ('30x40', 30, 40, 157, 16, true),
   ('30x40', 30, 40, 170, 17, true)
-on conflict (size_label, gsm) do nothing;
+on conflict (currency, size_label, gsm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- White lining stock — DUMMY (client 2026-07: plain inner lining priced
@@ -61,7 +76,7 @@ insert into public.white_paper_rates (size_label, width_in, height_in, gsm, cost
   ('30x40', 30, 40, 130, 11, true), -- DUMMY — replace with real rate
   ('30x40', 30, 40, 157, 13, true), -- DUMMY — replace with real rate
   ('30x40', 30, 40, 170, 14, true)  -- DUMMY — replace with real rate
-on conflict (size_label, gsm) do nothing;
+on conflict (currency, size_label, gsm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Board stock ("Board" rate section) — DUMMY (client 2-Jul: foam-cover material
@@ -82,7 +97,7 @@ insert into public.art_card_rates (type, size_label, width_in, height_in, gsm, c
   ('Art card', '30x40', 30, 40, 130, 15, true), -- DUMMY — replace with real rate
   ('Art card', '30x40', 30, 40, 157, 18, true), -- DUMMY — replace with real rate
   ('Art card', '30x40', 30, 40, 170, 19, true)  -- DUMMY — replace with real rate
-on conflict (type, size_label, gsm) do nothing;
+on conflict (currency, type, size_label, gsm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Special paper — DUMMY (examples; client to provide real catalogue)
@@ -90,7 +105,7 @@ on conflict (type, size_label, gsm) do nothing;
 insert into public.special_paper_rates (name, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
   ('Keycolor Black',    '23x36', 23, 36, 120, 25, true),
   ('Wibalin Natural',   '25x36', 25, 36, 115, 30, true)
-on conflict (name, size_label) do nothing;
+on conflict (currency, name, size_label) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Offset printing — PLACEHOLDER (price for the first 1000 sheets / per
@@ -116,7 +131,7 @@ insert into public.offset_printing_rates (size_label, colour, width_in, height_i
 -- Round 10: the unique key is (size_label, colour, vendor) and these seed rows
 -- carry no vendor, so the inference target is the PARTIAL index over the
 -- un-named rows (the predicate must be restated for Postgres to match it).
-on conflict (size_label, colour) where vendor is null do nothing;
+on conflict (currency, size_label, colour) where vendor is null and owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Digital printing — PLACEHOLDER (flat rate per sheet). Both-sides 13x23 is a
@@ -128,7 +143,7 @@ insert into public.digital_printing_rates (size_label, width_in, height_in, cost
   ('13x23 (both sides)', 13, 23, 28, true),
   ('13x30', 13, 30, 33, true)
 -- Round 10: see the offset note above — partial index over un-named rows.
-on conflict (size_label) where vendor is null do nothing;
+on conflict (currency, size_label) where vendor is null and owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Relief printing (embossing / debossing) — PLACEHOLDER (rate x sq inch)
@@ -136,14 +151,14 @@ on conflict (size_label) where vendor is null do nothing;
 insert into public.relief_rates (type, rate_per_sqin, is_dummy) values
   ('embossing', 0.60, true),
   ('debossing', 0.60, true)
-on conflict (type) do nothing;
+on conflict (currency, type) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Ribbon tag — DUMMY (10mm standard; custom size = custom price on the form)
 -- ---------------------------------------------------------------------------
 insert into public.ribbon_tag_rates (size_label, price_each, is_dummy) values
   ('10mm', 1.50, true)
-on conflict (size_label) do nothing;
+on conflict (currency, size_label) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Lamination — PLACEHOLDER (rate per 100 sq inch)
@@ -153,7 +168,7 @@ insert into public.lamination_rates (type, rate_per_100sqin, is_dummy) values
   ('glossy',     0.90, true),
   ('thermal',    2.20, true),
   ('soft_touch', 3.30, true)
-on conflict (type) do nothing;
+on conflict (currency, type) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Foiling — PLACEHOLDER (rate x area in sq inch; same across colours)
@@ -168,7 +183,7 @@ insert into public.foiling_rates (color, finish, rate_per_sqin, is_dummy) values
   ('copper', 'matte',  0.06, true),
   ('others', 'glossy', 0.06, true),
   ('others', 'matte',  0.06, true)
-on conflict (color, finish) do nothing;
+on conflict (currency, color, finish) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- UV coating — PLACEHOLDER
@@ -178,7 +193,7 @@ insert into public.uv_coating_rates (type, rate, unit, is_dummy) values
   ('spot',     0.06, 'per_sqin',    true),
   ('drip_off', 1.00, 'per_100sqin', true),
   ('aquas',    0.45, 'per_100sqin', true)
-on conflict (type) do nothing;
+on conflict (currency, type) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Magnets — DUMMY (diameter 10/15 mm x thickness 1.5/2 mm)
@@ -188,7 +203,7 @@ insert into public.magnet_rates (diameter_mm, thickness_mm, price_each, is_dummy
   (10, 2.0, 1.50, true),
   (15, 1.5, 2.00, true),
   (15, 2.0, 2.50, true)
-on conflict (diameter_mm, thickness_mm) do nothing;
+on conflict (currency, diameter_mm, thickness_mm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Washers — DUMMY
@@ -196,7 +211,7 @@ on conflict (diameter_mm, thickness_mm) do nothing;
 insert into public.washer_rates (name, price_each, is_dummy) values
   ('10mm', 0.40, true),
   ('15mm', 0.60, true)
-on conflict (name) do nothing;
+on conflict (currency, name) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Foam inserts — DUMMY (sheet size also placeholder).
@@ -211,7 +226,7 @@ insert into public.foam_rates (type, thickness_mm, sheet_width_in, sheet_height_
   ('EPE',  10, 40, 80, 110, 11, true), -- DUMMY — replace with real rate
   ('PU',   10, 40, 80, 180, 16, true), -- DUMMY — replace with real rate
   ('PU',   20, 40, 80, 320, 16, true)  -- DUMMY — replace with real rate
-on conflict (type, thickness_mm) do nothing;
+on conflict (currency, type, thickness_mm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Reverse-board insert stock — PLACEHOLDER. Reverse board IS kappa board, so
@@ -224,7 +239,7 @@ insert into public.reverse_board_rates (thickness_mm, cost_per_sheet, is_dummy) 
   (2.0, 40.00, true),
   (2.5, 50.00, true),
   (3.0, 60.00, true)
-on conflict (thickness_mm, sheet_width_in, sheet_height_in) do nothing;
+on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Fixed consumables — tape PLACEHOLDER (charged per tray/lid). Glue + metlock
@@ -232,7 +247,7 @@ on conflict (thickness_mm, sheet_width_in, sheet_height_in) do nothing;
 -- ---------------------------------------------------------------------------
 insert into public.consumable_rates (name, rate, unit, is_dummy) values
   ('tape', 0.80, 'per_tray_or_lid', true)
-on conflict (name) do update
+on conflict (currency, name) where owner_id is null do update
   set rate = excluded.rate, unit = excluded.unit, is_dummy = excluded.is_dummy;
 
 -- ---------------------------------------------------------------------------
@@ -249,7 +264,7 @@ insert into public.labour_rates (name, rate_per_month, rate_per_day, rate_per_ho
   ('Punching',   42000,   1680,    210,    true),
   ('Floorwork',  200000,  8000,    1000,   true),
   ('Universal',  90000,   3600,    450,    true)
-on conflict (name) do update
+on conflict (currency, name) where owner_id is null do update
   set rate_per_month = excluded.rate_per_month,
       rate_per_day   = excluded.rate_per_day,
       rate_per_hour  = excluded.rate_per_hour,
@@ -263,13 +278,13 @@ insert into public.handle_rates (type, price_each, is_dummy) values
   ('Metal bar',     12, true),
   ('Rope',          6,  true),
   ('Leather strap', 18, true)
-on conflict (type) do nothing;
+on conflict (currency, type) where owner_id is null do nothing;
 
 insert into public.lock_rates (type, price_each, is_dummy) values
   ('Magnetic clasp', 9,  true),
   ('Metal hook',     7,  true),
   ('Push lock',      15, true)
-on conflict (type) do nothing;
+on conflict (currency, type) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Window film — DUMMY (nested on a film sheet like foam; sheet size placeholder).
@@ -277,7 +292,7 @@ on conflict (type) do nothing;
 insert into public.window_rates (name, film_width_in, film_height_in, cost_per_sheet, is_dummy) values
   ('PVC film', 40, 50, 60, true),
   ('PET film', 40, 50, 85, true)
-on conflict (name) do nothing;
+on conflict (currency, name) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Miscellaneous materials (round 3) — DUMMY. Ad-hoc materials the factory buys
@@ -288,7 +303,7 @@ insert into public.misc_rates (name, unit, price, is_dummy) values
   ('Satin cloth',  'per metre', 40, true), -- DUMMY — replace with real rate
   ('Velvet',       'per metre', 80, true), -- DUMMY — replace with real rate
   ('Cloth buckle', 'each',       6, true)  -- DUMMY — replace with real rate
-on conflict (name) do nothing;
+on conflict (currency, name) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- App config — process defaults, not pricing. Folding allowance, lid depth,
@@ -303,6 +318,8 @@ insert into public.app_config (key, value, unit, description, is_dummy) values
   ('overhead_pct',             15,  '%',   'Overhead applied on level 1 (material + labour)', false),
   ('print_wastage_pct',        10,  '%',   'Extra printed sheets: printing only (setup/spoilage)', false),
   ('print_foil_wastage_pct',   15,  '%',   'Extra printed sheets: printing + foiling/UV', false)
+-- app_config keeps a plain `key` primary key — it is global formula config
+-- with no owner_id column, unlike every rate table below/above.
 on conflict (key) do update
   set value = excluded.value, unit = excluded.unit,
       description = excluded.description, is_dummy = excluded.is_dummy;
@@ -310,8 +327,12 @@ on conflict (key) do update
 -- ---------------------------------------------------------------------------
 -- Margin — PLACEHOLDER (admin-only via RLS). Set your own before quoting.
 -- ---------------------------------------------------------------------------
+-- The conflict target is the PARTIAL index over the shared master row
+-- (margin_config gained owner_id + an id primary key with the trial role), so
+-- the predicate has to be restated for Postgres to match it — same reason as
+-- the rate tables above.
 insert into public.margin_config (key, value, description, is_dummy) values
   ('default_margin_pct', 25, 'Default profit margin applied last (editable)', true)
-on conflict (key) do update
+on conflict (key) where owner_id is null do update
   set value = excluded.value, description = excluded.description,
       is_dummy = excluded.is_dummy;

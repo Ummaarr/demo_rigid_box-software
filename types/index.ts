@@ -7,7 +7,19 @@
 import type { CostAdjustment } from "@/lib/engines/cost";
 export type { CostAdjustment, AdjustableLine } from "@/lib/engines/cost";
 
-export type UserRole = "admin" | "staff";
+// "trial" = a short-lived lead-evaluation account (see
+// supabase/migration-trial-role.sql): isolated to its own clients/estimates/
+// quotes/rate-card clone, never visible to another trial user, and never
+// visible to real staff/admin's own work (though admin can still see trial
+// accounts' data for support).
+export type UserRole = "admin" | "staff" | "trial";
+
+// The four markets a trial lead can evaluate from (see
+// supabase/migration-multi-currency.sql). Every SHARED rate row is tagged with
+// one of these, so a trial's private clone is copied from the template set
+// matching the market they picked at first login — real per-market prices, not
+// an FX conversion of one base card. Admin/staff are always INR.
+export type CurrencyCode = "INR" | "USD" | "GBP" | "AED";
 
 /**
  * The 8 standard box types + tray_only (client 8-Jul: "one more option under
@@ -30,6 +42,16 @@ export interface SessionInfo {
   role: UserRole | null;
   fullName: string | null;
   email: string | null;
+  /** role === "trial" only — has this lead dismissed the "review your rates" banner? */
+  trialRatesAck: boolean;
+  /**
+   * role === "trial" only — which market this lead picked at first login.
+   * null means they have not picked yet, and therefore have NO rate card at
+   * all (cloning is deferred until the choice), so app/(app)/layout.tsx shows
+   * them the blocking country picker instead of the app. Always null for
+   * admin/staff, whose card is the INR master.
+   */
+  trialCurrency: CurrencyCode | null;
 }
 
 // ===========================================================================
@@ -526,6 +548,20 @@ export interface EstimateRequest {
     glueTotal?: number;
     metlockTotal?: number;
     tapeTotal?: number;
+    /**
+     * Whether this box uses tape at all.
+     *
+     * ABSENT = true. Every box type has at least one component whose name
+     * matches "tray"/"lid" (see trayLidComponentCount in lib/engines/
+     * material.ts), so before this flag existed tape was ALWAYS charged and
+     * there was no way to say a job uses none. Defaulting the absent case to
+     * "used" is what keeps every saved specs_snapshot recomputing
+     * byte-identically; only an explicit `false` zeroes the line.
+     *
+     * false  -> tape cost is 0, and tapeTotal is ignored.
+     * true   -> tapeTotal when given, else the auto per-tray/lid computation.
+     */
+    tapeUsed?: boolean;
     /**
      * Quantity mode (client 21-Jul: "either select bottles or cost itself").
      * Glue/metlock consumption varies too much to derive, so the user either

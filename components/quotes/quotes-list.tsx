@@ -11,11 +11,10 @@ import { FileDown, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { QuoteListItem } from "@/lib/db/quotes";
-import { formatMoney } from "@/lib/currency";
+import { useMoneyFormatter } from "@/lib/currency-context";
 
 const STATUSES = ["draft", "sent", "accepted", "rejected", "revised"] as const;
 
-const inr = formatMoney;
 
 const fmtDate = (s: string) =>
   new Date(s).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -29,6 +28,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export function QuotesList({ quotes }: { quotes: QuoteListItem[] }) {
+  const inr = useMoneyFormatter();
   const [search, setSearch] = useState("");
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);

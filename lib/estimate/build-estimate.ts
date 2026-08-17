@@ -736,10 +736,42 @@ export function recomputeMaterials(
  * role admin client by default for rate reads (rates are global config and
  * margin_config is admin-only at RLS); the route verifies the session first.
  * A different client can be injected for testing.
+ *
+ * `ownerId`: null reads the shared master rate card (admin/staff — the
+ * default, so every offline script and existing caller that doesn't pass one
+ * stays byte-identical); a trial user's id reads ONLY their own private
+ * clone. Always derive this from the session via ownerScopeFor() in
+ * lib/auth.ts — never trust a client-sent value.
  */
+/**
+ * What Engine 2 should charge for tape, resolved from the request.
+ *
+ * Three-way, most-specific first:
+ *   board section off   -> 0   (tape tapes the board components)
+ *   tapeUsed === false  -> 0   (the job uses no tape; any amount is ignored)
+ *   otherwise           -> tapeTotal when given, else `undefined`, which
+ *                          leaves Engine 2 on its auto per-tray/lid path
+ *
+ * `tapeUsed` is ABSENT on every snapshot saved before the toggle existed and
+ * defaults to "used", so this is a no-op for them — the property that
+ * scripts/validate-tape-toggle.ts pins.
+ *
+ * Exported purely so that branch is testable without a database; buildEstimate
+ * needs a Supabase client, this does not.
+ */
+export function resolveTapeOverride(
+  manual: EstimateRequest["manual"],
+  includeBoardCost: boolean,
+): number | undefined {
+  if (!includeBoardCost) return 0;
+  if (manual?.tapeUsed === false) return 0;
+  return manual?.tapeTotal;
+}
+
 export async function buildEstimate(
   rawReq: EstimateRequest,
   supabase: SupabaseClient = createAdminClient(),
+  ownerId: string | null = null,
 ): Promise<BuiltEstimate> {
   validate(rawReq);
 
@@ -777,9 +809,9 @@ export async function buildEstimate(
   // the pipeline (resolver, engines, fit-check, snapshots) runs unchanged.
   // specsSnapshot below still stores the RAW request (with `auto`), so a
   // re-run re-optimizes; the frozen rates make recompute deterministic.
-  const { req, autoPicks } = await resolveAutoPrinting(supabase, applied);
+  const { req, autoPicks } = await resolveAutoPrinting(supabase, applied, ownerId);
 
-  const rates = await loadEstimateRates(supabase, req);
+  const rates = await loadEstimateRates(supabase, req, ownerId);
   if (autoPicks.length > 0) rates.autoPicks = autoPicks;
   const materialInput = buildMaterialInput(req, rates);
 
@@ -892,8 +924,7 @@ export async function buildEstimate(
     handleEach: rates.handleEach,
     lockEach: rates.lockEach,
     windowCostPerSheet: rates.window?.costPerSheet,
-    // Board section off -> no tape either (tape tapes the board components).
-    tapeCostOverride: includeBoardCost ? req.manual?.tapeTotal : 0,
+    tapeCostOverride: resolveTapeOverride(req.manual, includeBoardCost),
     accessories: {
       magnetEach: rates.magnetEach ?? 0,
       washerEach: rates.washerEach ?? 0,
@@ -946,15 +977,18 @@ export type StaffCostBreakdown = Omit<CostBreakdown, "margin" | "subtotalAfterMa
 
 /**
  * Shape the cost breakdown for the caller's role. Staff see all costs + the
- * final price but NOT the margin amount or the after-margin subtotal. Admins see
- * everything. Enforced here, at the API boundary — never rely on the UI to hide it.
+ * final price but NOT the margin amount or the after-margin subtotal (that's
+ * the COMPANY's real margin on shared work). Admin and trial see everything —
+ * a trial user's margin is just their own markup input on their own private
+ * estimate (their own cloned margin_config row), not a secret. Enforced here,
+ * at the API boundary — never rely on the UI to hide it.
  */
 export function costForRole(
   cost: CostBreakdown,
   role: string | null,
 ): CostBreakdown | StaffCostBreakdown {
-  if (role === "admin") return cost;
-  // Default to the restricted view for staff and any non-admin role.
+  if (role === "admin" || role === "trial") return cost;
+  // Default to the restricted view for staff and any other role.
   const { margin: _margin, subtotalAfterMargin: _sub, ...staffView } = cost;
   void _margin;
   void _sub;

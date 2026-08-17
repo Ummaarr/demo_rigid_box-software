@@ -1,8 +1,17 @@
 // POST /api/staff
-// Admin-only: provision a new user (Staff or Admin) directly with an email +
-// password so the account works immediately (no SMTP/invite needed). Uses the
-// Supabase Auth admin API (service role) server-side only — the key never
-// reaches the browser. Re-checks admin here (defense in depth beyond the page).
+// Admin-only: provision a new user (Staff, Admin, or a short-lived Trial lead
+// account) directly with an email + password so the account works immediately
+// (no SMTP/invite needed). Uses the Supabase Auth admin API (service role)
+// server-side only — the key never reaches the browser. Re-checks admin here
+// (defense in depth beyond the page).
+//
+// A TRIAL user also gets a private clone of the master rate card, so they can
+// enter their own real material costs without seeing or touching anyone
+// else's — but NOT here. Since multi-currency, the master card is four
+// per-market template sets, and which one to copy isn't known until the lead
+// picks their country on first login. Cloning therefore happens in
+// POST /api/trial/set-currency, and a freshly created trial account
+// deliberately has a profiles row and nothing else until then.
 
 import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
@@ -49,7 +58,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (role !== "staff" && role !== "admin") {
+  if (role !== "staff" && role !== "admin" && role !== "trial") {
     return Response.json({ error: "Invalid role." }, { status: 400 });
   }
 

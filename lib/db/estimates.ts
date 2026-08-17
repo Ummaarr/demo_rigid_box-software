@@ -26,27 +26,42 @@ export interface EstimateDetail extends EstimateListItem {
   cost_breakdown: CostBreakdown | null;
 }
 
+/**
+ * `createdBy`: pass a user id to return ONLY that user's own estimates (trial
+ * accounts — see ownerScopeFor() in lib/auth.ts); null/omitted returns every
+ * estimate, which is what admin and staff have always got.
+ */
 export async function loadEstimatesList(
   supabase: SupabaseClient,
+  createdBy: string | null = null,
 ): Promise<EstimateListItem[]> {
-  const res = await supabase
-    .from("estimates")
-    .select(
-      "id, box_type, name, status, quantity, price_per_box, total_price, created_at, client_id, created_by",
-    )
-    .order("created_at", { ascending: false })
-    .limit(200);
+  const scope = <T,>(q: T): T =>
+    createdBy == null
+      ? q
+      : (q as unknown as { eq: (c: string, v: string) => T }).eq("created_by", createdBy);
+
+  const res = await scope(
+    supabase
+      .from("estimates")
+      .select(
+        "id, box_type, name, status, quantity, price_per_box, total_price, created_at, client_id, created_by",
+      )
+      .order("created_at", { ascending: false })
+      .limit(200),
+  );
   let data = res.data as Record<string, unknown>[] | null;
   let error = res.error;
   // 42703 = no name/status columns yet (DB pre-migration-round3.sql).
   if (error && error.code === "42703") {
-    const legacy = await supabase
-      .from("estimates")
-      .select(
-        "id, box_type, quantity, price_per_box, total_price, created_at, client_id, created_by",
-      )
-      .order("created_at", { ascending: false })
-      .limit(200);
+    const legacy = await scope(
+      supabase
+        .from("estimates")
+        .select(
+          "id, box_type, quantity, price_per_box, total_price, created_at, client_id, created_by",
+        )
+        .order("created_at", { ascending: false })
+        .limit(200),
+    );
     data = legacy.data as Record<string, unknown>[] | null;
     error = legacy.error;
   }
@@ -104,28 +119,42 @@ export async function loadEstimatesList(
   }));
 }
 
+/**
+ * `createdBy`: pass a user id to resolve ONLY that user's own estimate — a
+ * trial account asking for someone else's id gets null, i.e. a 404, rather
+ * than another lead's costed snapshot. null/omitted resolves any estimate
+ * (admin/staff, unchanged).
+ */
 export async function loadEstimateDetail(
   supabase: SupabaseClient,
   id: string,
+  createdBy: string | null = null,
 ): Promise<EstimateDetail | null> {
-  const res = await supabase
-    .from("estimates")
-    .select(
-      "id, box_type, name, status, quantity, price_per_box, total_price, created_at, client_id, created_by, specs_snapshot, rates_snapshot, cost_breakdown",
-    )
-    .eq("id", id)
-    .maybeSingle();
+  const scope = <T,>(q: T): T =>
+    createdBy == null
+      ? q
+      : (q as unknown as { eq: (c: string, v: string) => T }).eq("created_by", createdBy);
+
+  const res = await scope(
+    supabase
+      .from("estimates")
+      .select(
+        "id, box_type, name, status, quantity, price_per_box, total_price, created_at, client_id, created_by, specs_snapshot, rates_snapshot, cost_breakdown",
+      )
+      .eq("id", id),
+  ).maybeSingle();
   let data = res.data as Record<string, unknown> | null;
   let error = res.error;
   // 42703 = no name/status columns yet (DB pre-migration-round3.sql).
   if (error && error.code === "42703") {
-    const legacy = await supabase
-      .from("estimates")
-      .select(
-        "id, box_type, quantity, price_per_box, total_price, created_at, client_id, created_by, specs_snapshot, rates_snapshot, cost_breakdown",
-      )
-      .eq("id", id)
-      .maybeSingle();
+    const legacy = await scope(
+      supabase
+        .from("estimates")
+        .select(
+          "id, box_type, quantity, price_per_box, total_price, created_at, client_id, created_by, specs_snapshot, rates_snapshot, cost_breakdown",
+        )
+        .eq("id", id),
+    ).maybeSingle();
     data = legacy.data as Record<string, unknown> | null;
     error = legacy.error;
   }

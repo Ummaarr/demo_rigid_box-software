@@ -85,14 +85,25 @@ export async function saveQuote(
   const insert = (row: Record<string, unknown>) =>
     supabase.from("quotes").insert(row).select("id").single();
 
+  const optional = {
+    ...(data.notes ? { notes: data.notes } : {}),
+    // Frozen so a re-render prints the currency it was issued in, not the
+    // re-generator's. Omitted for admin/staff (BRAND dressing, as before).
+    ...(data.currency && data.currency !== "INR" ? { currency: data.currency } : {}),
+  };
+
   let { data: row, error } = await insert(
-    data.notes ? { ...base, notes: data.notes } : base,
+    Object.keys(optional).length ? { ...base, ...optional } : base,
   );
   // 42703 = undefined_column: a live DB that hasn't run migration-round10.sql
-  // yet has no `notes`. Save the quote anyway rather than losing it — the note
-  // is the only thing dropped. (Same degradation as round 3's name/status.)
-  if (error?.code === "42703" && data.notes) {
-    console.warn("quote notes skipped (run migration-round10.sql):", error.message);
+  // (notes) or migration-multi-currency.sql (currency) yet. Save the quote
+  // anyway rather than losing it — only those extras are dropped. (Same
+  // degradation as round 3's name/status.)
+  if (error?.code === "42703" && Object.keys(optional).length) {
+    console.warn(
+      "quote notes/currency skipped (run migration-round10.sql / migration-multi-currency.sql):",
+      error.message,
+    );
     ({ data: row, error } = await insert(base));
   }
   if (error || !row) {

@@ -1,7 +1,8 @@
 // PATCH /api/quote/[id] — update a saved quote's status (sent/accepted/…).
 // Auth required (staff send + track quotes; margin isn't involved here).
+// A trial account may only touch quotes it created.
 
-import { getSession } from "@/lib/auth";
+import { getSession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 
 const STATUSES = new Set(["draft", "sent", "accepted", "rejected", "revised"]);
@@ -26,7 +27,21 @@ export async function PATCH(
     return Response.json({ error: "Invalid status." }, { status: 400 });
   }
 
-  const { error } = await createAdminClient()
+  const admin = createAdminClient();
+  const scope = ownerScopeFor(session);
+  if (scope != null) {
+    const { data, error: findErr } = await admin
+      .from("quotes")
+      .select("id")
+      .eq("id", id)
+      .eq("created_by", scope)
+      .maybeSingle();
+    if (findErr || !data) {
+      return Response.json({ error: "Not found." }, { status: 404 });
+    }
+  }
+
+  const { error } = await admin
     .from("quotes")
     .update({ status: body.status })
     .eq("id", id);

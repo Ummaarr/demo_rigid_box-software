@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { verifySession } from "@/lib/auth";
+import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadEstimatesList } from "@/lib/db/estimates";
 import { loadClientsList } from "@/lib/db/clients-db";
@@ -17,9 +17,10 @@ export default async function EstimatesPage({
   const { new: openNew } = await searchParams;
 
   const admin = createAdminClient();
+  const scope = ownerScopeFor(session);
   const [estimates, clients] = await Promise.all([
-    loadEstimatesList(admin),
-    loadClientsList(admin),
+    loadEstimatesList(admin, scope),
+    loadClientsList(admin, scope),
   ]);
 
   return (

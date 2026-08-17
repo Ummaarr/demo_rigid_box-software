@@ -158,11 +158,15 @@ export function RateSection({
 }: {
   section: SectionDef;
   /** Staff (round 3) see rates read-only and PROPOSE changes instead of editing. */
-  role?: "admin" | "staff" | null;
+  role?: "admin" | "staff" | "trial" | null;
   /** Active rate-card search + filters (client 18-Jul). Default = show everything. */
   filters?: RateFilters;
 }) {
-  const isAdmin = role === "admin";
+  // Admin edits the shared master card; a trial account edits its OWN private
+  // clone (nothing else reads it, so there is nothing to gate — propose/approve
+  // exists only to protect the shared card from staff edits). Server-side, the
+  // same split lives in applyRateUpdate's ownership check.
+  const canEditDirectly = role === "admin" || role === "trial";
   // Adding / deleting catalogue rows is open to STAFF as well (client final
   // doc: "Staff Access: should be able to add and delete materials"). Editing
   // an existing rate stays admin-only — staff propose those (round 3), because
@@ -258,7 +262,7 @@ export function RateSection({
     setErr(null);
     setNotice(null);
     try {
-      if (!isAdmin) {
+      if (!canEditDirectly) {
         // Staff: the change is PROPOSED, not applied — the row keeps its
         // current value until an admin approves (round 3 workflow).
         await proposeRate(table, rowId, field, newValue, rowLabelFor(row));
@@ -402,7 +406,7 @@ export function RateSection({
     ) : (
       <button
         type="button"
-        title={isAdmin ? "Click to edit" : "Click to propose a change (admin approves)"}
+        title={canEditDirectly ? "Click to edit" : "Click to propose a change (admin approves)"}
         className={`text-sm transition-colors hover:text-primary ${isText ? "text-muted-foreground hover:text-foreground" : "tabular-nums"}`}
         onClick={() => setEditing({ rowId, field, value: String(rawVal ?? ""), isText })}
       >
@@ -478,8 +482,8 @@ export function RateSection({
                     {hasImage && (
                       <td className="py-2 pr-4">
                         <label
-                          className={isAdmin ? "inline-flex cursor-pointer" : "inline-flex"}
-                          title={isAdmin ? "Click to upload / replace photo (PNG, JPEG, WebP — max 2 MB)" : undefined}
+                          className={canEditDirectly ? "inline-flex cursor-pointer" : "inline-flex"}
+                          title={canEditDirectly ? "Click to upload / replace photo (PNG, JPEG, WebP — max 2 MB)" : undefined}
                         >
                           {row.image_path ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -490,10 +494,10 @@ export function RateSection({
                             />
                           ) : (
                             <span className="flex h-10 w-10 items-center justify-center rounded border border-dashed text-center text-[9px] leading-tight text-muted-foreground">
-                              {isAdmin ? "Add photo" : "No photo"}
+                              {canEditDirectly ? "Add photo" : "No photo"}
                             </span>
                           )}
-                          {isAdmin && (
+                          {canEditDirectly && (
                             <input
                               type="file"
                               accept="image/png,image/jpeg,image/webp"
@@ -546,7 +550,7 @@ export function RateSection({
                     ))}
                     {hasDummy && (
                       <td className="py-2 text-right">
-                        {isAdmin ? (
+                        {canEditDirectly ? (
                           <button type="button" disabled={saving} onClick={() => void toggleDummy(rowId, isDummy ?? false)} title="Toggle dummy / real">
                             <Badge variant="outline" className={isDummy ? "cursor-pointer border-amber-300 text-amber-700" : "cursor-pointer border-green-300 text-green-700"}>
                               {isDummy ? "Dummy" : "Real"}

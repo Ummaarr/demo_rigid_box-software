@@ -20,6 +20,12 @@ export async function POST(request: Request) {
   if (!session) {
     return Response.json({ error: "Not authenticated." }, { status: 401 });
   }
+  // Trial accounts never propose — they edit their own private card directly
+  // (PATCH /api/rates already allows it). Propose/approve exists only for
+  // staff changing the SHARED master card.
+  if (session.role === "trial") {
+    return Response.json({ error: "Not available for trial accounts." }, { status: 403 });
+  }
 
   let body: {
     table?: string;
@@ -130,6 +136,10 @@ export async function PATCH(request: Request) {
       req.field as string,
       value,
       (req.proposed_by_name as string | null) ?? "Unknown",
+      // The approving admin always writes to the SHARED master card — a
+      // proposal only ever names a master (owner_id null) row, since trial
+      // accounts never propose (rejected above).
+      { role: "admin", userId: session.userId },
     );
     if ("error" in result) {
       return Response.json({ error: result.error }, { status: 500 });
