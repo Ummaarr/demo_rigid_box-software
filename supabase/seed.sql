@@ -31,14 +31,14 @@
 -- Kappa board — PLACEHOLDER. Board is priced per mm of thickness, so
 -- cost_per_sheet = thickness x rate_per_mm (here 20/mm, on a 31x41 sheet).
 -- ---------------------------------------------------------------------------
-insert into public.board_rates (thickness_mm, cost_per_sheet, is_dummy) values
-  (1.2, 24.00, true),
-  (1.5, 30.00, true),
-  (1.8, 36.00, true),
-  (2.0, 40.00, true),
-  (2.5, 50.00, true),
-  (3.0, 60.00, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.board_rates (size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('31x41', 1.2, 24.00, true),
+  ('31x41', 1.5, 30.00, true),
+  ('31x41', 1.8, 36.00, true),
+  ('31x41', 2.0, 40.00, true),
+  ('31x41', 2.5, 50.00, true),
+  ('31x41', 3.0, 60.00, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Printed paper stock — DUMMY (sizes 23x36, 25x36, 30x40 at 120/130/157/170 GSM)
@@ -232,14 +232,14 @@ on conflict (currency, type, thickness_mm) where owner_id is null do nothing;
 -- Reverse-board insert stock — PLACEHOLDER. Reverse board IS kappa board, so
 -- it carries the same per-mm rate as board_rates above.
 -- ---------------------------------------------------------------------------
-insert into public.reverse_board_rates (thickness_mm, cost_per_sheet, is_dummy) values
-  (1.2, 24.00, true),
-  (1.5, 30.00, true),
-  (1.8, 36.00, true),
-  (2.0, 40.00, true),
-  (2.5, 50.00, true),
-  (3.0, 60.00, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.reverse_board_rates (size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('31x41', 1.2, 24.00, true),
+  ('31x41', 1.5, 30.00, true),
+  ('31x41', 1.8, 36.00, true),
+  ('31x41', 2.0, 40.00, true),
+  ('31x41', 2.5, 50.00, true),
+  ('31x41', 3.0, 60.00, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Fixed consumables — tape PLACEHOLDER (charged per tray/lid). Glue + metlock

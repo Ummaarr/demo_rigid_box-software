@@ -525,6 +525,16 @@ export interface EstimateRequest {
   sourceEstimateId?: string;
 
   boardThickness_mm: number; // -> board_rates(thickness_mm)
+  /**
+   * Which board STOCK SHEET to price against — `board_rates.size_label`.
+   *
+   * ABSENT on every snapshot saved before per-business sheet sizes existed,
+   * when a business could hold only one board sheet and the lookup keyed on
+   * thickness alone. The resolver treats an absent label as "the legacy sheet"
+   * and picks deterministically (see boardRow in lib/db/rates.ts), so old
+   * estimates reprice unchanged. New estimates always send it.
+   */
+  boardSizeLabel?: string;
   wrapping?: {
     outer?: OuterWrap;
     inner?: InnerWrap;

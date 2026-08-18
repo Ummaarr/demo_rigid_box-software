@@ -183,6 +183,30 @@ export function chooseBestPrinting(input: AutoEvalInput): AutoWinner {
   let considered = 0;
 
   for (const candidate of input.candidates) {
+    // --- cheap screens, before the expensive nesting run --------------------
+    //
+    // estimatePaperMaterial() carries the full combination search (set
+    // partitions x guillotine directions x orientation masks x band recursion)
+    // and runs ONCE PER CANDIDATE. With a handful of seeded sizes that was
+    // free; per-business sheet catalogues make it the hot loop, so the two
+    // conditions that provably rule a candidate out are tested by rectangle
+    // arithmetic first.
+    //
+    // Neither prunes a candidate that could have won:
+    //   1. a blank that does not fit the print sheet makes totalSheets
+    //      Infinity, which the `continue` below already discards — the nesting
+    //      run can only confirm it, at full cost;
+    //   2. a print sheet no paper can take never reaches the inner loop, since
+    //      every pairing fails the same `fits` test used there.
+    if (
+      !input.blanks.every((b) =>
+        fits({ width_in: b.width_in, height_in: b.height_in }, candidate.printSheet),
+      )
+    ) {
+      continue;
+    }
+    if (!input.papers.some((paper) => fits(candidate.printSheet, paper.sheet))) continue;
+
     // Nest the wrap blanks on this print size. Infinite sheets = doesn't fit.
     const est = estimatePaperMaterial(
       input.blanks,

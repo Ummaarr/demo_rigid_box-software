@@ -191,17 +191,21 @@ export async function loadAllRates(
 
   const sections: RateSectionData[] = [
     withMeta({ id: "board", label: "Kappa Board", category: "Materials", table: "board_rates", idField: "id", unitLabel: `${sym} per sheet`,
-      keyCols: [{ field: "thickness_mm", label: "Thickness (mm)" }],
+      keyCols: [
+        { field: "size_label", label: "Size" },
+        { field: "sheet_width_in", label: "Sheet W" }, { field: "sheet_height_in", label: "Sheet H" },
+        { field: "thickness_mm", label: "Thickness (mm)" },
+      ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
-      editableKeys: ["thickness_mm"],
-      newRowTemplate: { thickness_mm: 2, cost_per_sheet: 0 },
+      editableKeys: ["size_label", "sheet_width_in", "sheet_height_in", "thickness_mm"],
+      newRowTemplate: { size_label: "", sheet_width_in: 31, sheet_height_in: 41, thickness_mm: 2, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(boardRes) }),
 
     // Renamed "Printed Paper" -> "Art Paper" (client 4-Jul); table unchanged.
     withMeta({ id: "paper", label: "Art Paper", category: "Materials", table: "paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         { field: "size_label", label: "Size" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
         { field: "gsm", label: "GSM" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
@@ -214,7 +218,7 @@ export async function loadAllRates(
       keyCols: [
         { field: "name", label: "Paper type" },
         { field: "size_label", label: "Size" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
         { field: "gsm", label: "GSM" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
@@ -231,7 +235,7 @@ export async function loadAllRates(
       keyCols: [
         ...(hasBoardType ? [{ field: "type", label: "Type" }] : []),
         { field: "size_label", label: "Size" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
         { field: "gsm", label: "GSM" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
@@ -245,7 +249,7 @@ export async function loadAllRates(
     withMeta({ id: "special_paper", label: "Special Paper", category: "Materials", table: "special_paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
         { field: "name", label: "Name" }, { field: "size_label", label: "Size" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
         { field: "gsm", label: "GSM" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
@@ -261,7 +265,7 @@ export async function loadAllRates(
         { field: "size_label", label: "Size" },
         { field: "colour", label: "Colour" },
         { field: "vendor", label: "Vendor" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
       ],
       editCols: [{ field: "first_1000", label: `First 1000 (${sym})` }, { field: "additional_1000", label: `+1000 (${sym})` }],
       editableKeys: ["size_label", "colour", "vendor", "width_in", "height_in"],
@@ -272,7 +276,7 @@ export async function loadAllRates(
       keyCols: [
         { field: "size_label", label: "Size" },
         { field: "vendor", label: "Vendor" },
-        { field: "width_in", label: "Sheet W (in)" }, { field: "height_in", label: "Sheet H (in)" },
+        { field: "width_in", label: "Sheet W" }, { field: "height_in", label: "Sheet H" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "vendor", "width_in", "height_in"],
@@ -326,7 +330,7 @@ export async function loadAllRates(
     withMeta({ id: "foam", label: "Foam Inserts", category: "Inserts", table: "foam_rates", idField: "id", unitLabel: `${sym} per mm (or ${sym} per sheet fallback)`,
       keyCols: [
         { field: "type", label: "Type" }, { field: "thickness_mm", label: "Thick. (mm)" },
-        { field: "sheet_width_in", label: "Sheet W (in)" }, { field: "sheet_height_in", label: "Sheet H (in)" },
+        { field: "sheet_width_in", label: "Sheet W" }, { field: "sheet_height_in", label: "Sheet H" },
       ],
       // rate_per_mm (client 2-Jul): when set (> 0) sheet price = rate x thickness;
       // cost_per_sheet is the flat fallback for rows without a per-mm rate.
@@ -339,10 +343,14 @@ export async function loadAllRates(
       hasDummy: true, rows: rows(foamRes) }),
 
     withMeta({ id: "reverse_board", label: "Reverse Board (insert)", category: "Inserts", table: "reverse_board_rates", idField: "id", unitLabel: `${sym} per sheet`,
-      keyCols: [{ field: "thickness_mm", label: "Thickness (mm)" }],
+      keyCols: [
+        { field: "size_label", label: "Size" },
+        { field: "sheet_width_in", label: "Sheet W" }, { field: "sheet_height_in", label: "Sheet H" },
+        { field: "thickness_mm", label: "Thickness (mm)" },
+      ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
-      editableKeys: ["thickness_mm"],
-      newRowTemplate: { thickness_mm: 0, cost_per_sheet: 0 },
+      editableKeys: ["size_label", "sheet_width_in", "sheet_height_in", "thickness_mm"],
+      newRowTemplate: { size_label: "", sheet_width_in: 31, sheet_height_in: 41, thickness_mm: 0, cost_per_sheet: 0 },
       hasDummy: true, rows: rows(reverseBoardRes) }),
 
     withMeta({ id: "ribbon_tag", label: "Ribbon Tags", category: "Hardware", table: "ribbon_tag_rates", idField: "id", unitLabel: `${sym} each`,
@@ -369,7 +377,7 @@ export async function loadAllRates(
     withMeta({ id: "windows", label: "Window Film", category: "Inserts", table: "window_rates", idField: "id", unitLabel: `${sym} per film sheet`,
       keyCols: [
         { field: "name", label: "Film" },
-        { field: "film_width_in", label: "Sheet W (in)" }, { field: "film_height_in", label: "Sheet H (in)" },
+        { field: "film_width_in", label: "Sheet W" }, { field: "film_height_in", label: "Sheet H" },
       ],
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "film_width_in", "film_height_in"],

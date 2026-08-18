@@ -18,6 +18,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  asUnit,
+  formatSheet,
+  fromDim,
+  labelAgreesWithSheet,
+  parseSizeLabel,
+  toDim,
+  UNIT_LABELS,
+  type Unit,
+} from "@/lib/units";
 import { InlineNotice } from "@/components/ui/inline-notice";
 
 // Types mirrored from lib/db/rate-admin (no server-only import needed here).
@@ -64,6 +74,17 @@ function fmtDate(val: unknown): string {
 }
 
 /**
+ * Columns holding a stock sheet dimension. Stored in INCHES always; the row's
+ * `size_unit` says which unit to show them in. Three naming conventions exist
+ * for the one concept, hence the set rather than a prefix test.
+ */
+const SHEET_DIM_FIELDS = new Set([
+  "width_in", "height_in",
+  "sheet_width_in", "sheet_height_in",
+  "film_width_in", "film_height_in",
+]);
+
+/**
  * A row whose size label disagrees with its own width/height columns — e.g.
  * "30x 20" saved with 23x22 in. The engine nests on the DIMENSIONS, so such a
  * row silently costs the wrong sheet and surfaces later as a confusing
@@ -73,16 +94,20 @@ function fmtDate(val: unknown): string {
 function sizeMismatch(row: Record<string, unknown>): string | null {
   const label = row.size_label;
   if (typeof label !== "string") return null;
-  const m = label.match(/^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$/i);
-  if (!m) return null;
-  // Paper/print tables use width_in/height_in; window film uses film_*.
-  const w = Number(row.width_in ?? row.film_width_in);
-  const h = Number(row.height_in ?? row.film_height_in);
+  const parsed = parseSizeLabel(label);
+  if (!parsed) return null;
+  // Three column conventions for one concept: paper/print use width_in /
+  // height_in, board and foam use sheet_*, window film uses film_*.
+  const w = Number(row.width_in ?? row.sheet_width_in ?? row.film_width_in);
+  const h = Number(row.height_in ?? row.sheet_height_in ?? row.film_height_in);
   if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
-  const a = Number(m[1]);
-  const b = Number(m[2]);
-  if ((a === w && b === h) || (a === h && b === w)) return null;
-  return `Name says ${a}×${b} but the sheet is ${w}×${h} in — costing uses ${w}×${h}.`;
+  // The label is written in the row's OWN unit while the sheet is stored in
+  // inches, so both sides are compared in that unit — shared with the server's
+  // guard in build-estimate.ts, which used to be a second copy of this regex.
+  const unit = asUnit(row.size_unit);
+  if (labelAgreesWithSheet(label, { width_in: w, height_in: h }, unit)) return null;
+  const actual = formatSheet(w, h, unit);
+  return `Name says ${parsed.a}×${parsed.b} but the sheet is ${actual} — costing uses ${actual}.`;
 }
 
 // Friendly display names for config keys. The coded key stays in the DB (all
@@ -191,6 +216,9 @@ export function RateSection({
 
   // Add-row state: null = hidden; object = the in-progress new row values.
   const [addingRow, setAddingRow] = useState<Record<string, string | number> | null>(null);
+  // The unit the NEW row's sheet dimensions are being typed in. Converted to
+  // inches on submit — storage never changes (see lib/units.ts).
+  const [addUnit, setAddUnit] = useState<Unit>("in");
   const [addErr, setAddErr] = useState<string | null>(null);
   // Photo picked while adding a row — uploaded right after the insert returns
   // the new row id (client 8-Jul: "add images along with the details").
@@ -252,10 +280,14 @@ export function RateSection({
       newValue = editing.value.trim();
       if (row && (row[field] ?? "") === newValue) { setEditing(null); return; }
     } else {
-      const num = parseFloat(editing.value);
+      const typed = parseFloat(editing.value);
       // Reject empty / negative / non-numeric — shake and keep editing so the
       // user can correct it (Escape still cancels).
-      if (isNaN(num) || num < 0) { shakeEdit(); return; }
+      if (isNaN(typed) || typed < 0) { shakeEdit(); return; }
+      // Sheet dimensions are typed in the row's unit but STORED in inches.
+      const unit = asUnit(row?.size_unit);
+      const num =
+        unit !== "in" && SHEET_DIM_FIELDS.has(field) ? fromDim(typed, unit) : typed;
       if (row && Number(row[field]) === num) { setEditing(null); return; }
       newValue = num;
     }
@@ -338,7 +370,17 @@ export function RateSection({
     setSaving(true);
     setAddErr(null);
     try {
-      const inserted = await insertRate(table, addingRow);
+      // Dimensions were typed in addUnit; the columns are inches. Send the
+      // converted numbers plus the unit itself, so the row reads back in the
+      // unit its owner actually buys in.
+      const payload: Record<string, string | number> = { ...addingRow };
+      if (tableHasSheetDims) {
+        for (const f of Object.keys(payload)) {
+          if (SHEET_DIM_FIELDS.has(f)) payload[f] = fromDim(Number(payload[f]), addUnit);
+        }
+        payload.size_unit = addUnit;
+      }
+      const inserted = await insertRate(table, payload);
       // Photo picked during add: the insert response carries the new row id,
       // so the image can be attached in the same flow (client 8-Jul).
       let imagePath: string | null = null;
@@ -375,6 +417,7 @@ export function RateSection({
   const allCols = [...initial.keyCols, ...initial.editCols, ...(textEditCols ?? [])];
   // For the add-row form, show all template fields in column order.
   const templateFields = initial.newRowTemplate ? Object.keys(initial.newRowTemplate) : [];
+  const tableHasSheetDims = templateFields.some((f) => SHEET_DIM_FIELDS.has(f));
   const addRowColDefs: ColDef[] = templateFields.map((f) => {
     const found = allCols.find((c) => c.field === f);
     return found ?? { field: f, label: f };
@@ -386,8 +429,14 @@ export function RateSection({
     rawVal: unknown,
     isText: boolean,
     className?: string,
+    // The row's own unit, for the sheet-dimension columns. Both the shown value
+    // and the value being typed are in this unit; commitEdit converts back to
+    // the inches actually stored.
+    unit: Unit = "in",
   ) {
     const isEditing = editing?.rowId === rowId && editing?.field === field;
+    const converts = !isText && unit !== "in" && SHEET_DIM_FIELDS.has(field);
+    const shown = converts && typeof rawVal === "number" ? toDim(rawVal, unit) : rawVal;
     return isEditing ? (
       <input
         autoFocus
@@ -414,13 +463,13 @@ export function RateSection({
         type="button"
         title={canEditDirectly ? "Click to edit" : "Click to propose a change (admin approves)"}
         className={`text-sm transition-colors hover:text-primary ${isText ? "text-muted-foreground hover:text-foreground" : "tabular-nums"}`}
-        onClick={() => setEditing({ rowId, field, value: String(rawVal ?? ""), isText })}
+        onClick={() => setEditing({ rowId, field, value: String(shown ?? ""), isText })}
       >
         {isText
           ? rawVal ? String(rawVal) : <span className="text-xs italic opacity-50">—</span>
-          : typeof rawVal === "number"
-            ? rawVal % 1 === 0 ? String(rawVal) : rawVal.toFixed(2)
-            : String(rawVal ?? "—")}
+          : typeof shown === "number"
+            ? shown % 1 === 0 ? String(shown) : shown.toFixed(2)
+            : String(shown ?? "—")}
       </button>
     );
   }
@@ -534,7 +583,12 @@ export function RateSection({
                             : editableKeySet.has(c.field)
                               ? (
                                 <span className="inline-flex items-center gap-1">
-                                  {renderEditableCell(rowId, c.field, row[c.field], !isNumericField(c.field, rows))}
+                                  {renderEditableCell(rowId, c.field, row[c.field], !isNumericField(c.field, rows), undefined, asUnit(row.size_unit))}
+                                  {c.field === "size_label" && asUnit(row.size_unit) !== "in" && (
+                                    <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                                      {UNIT_LABELS[asUnit(row.size_unit)]}
+                                    </span>
+                                  )}
                                   {c.field === "size_label" && mismatch && (
                                     <span title={mismatch} className="text-amber-600" aria-label={mismatch}>
                                       <AlertTriangle className="size-3.5" />
@@ -671,6 +725,31 @@ export function RateSection({
             </tbody>
           </table>
         </div>
+
+        {/* Unit for the sheet dimensions being typed above. Per-row, not a global
+            preference: one card can hold a 70x100 cm paper next to a 23x36 in one. */}
+        {addingRow && tableHasSheetDims && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded border border-primary/30 bg-muted/20 px-3 py-2">
+            <span className="text-xs text-muted-foreground">Sheet size entered in</span>
+            {(["in", "cm", "mm"] as Unit[]).map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setAddUnit(u)}
+                className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                  addUnit === u
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {UNIT_LABELS[u]}
+              </button>
+            ))}
+            <span className="text-xs text-muted-foreground/70">
+              stored in inches either way — this is how it reads back
+            </span>
+          </div>
+        )}
 
         {/* Extra fields in the add-row template that aren't key cols or edit cols */}
         {addingRow && addRowColDefs.filter((c) =>

@@ -3,6 +3,17 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { DEFAULT_BOARD_TYPE } from "@/types";
+import { asUnit, type Unit } from "@/lib/units";
+
+/** A selectable stock size: its label, the unit it was entered in, and the
+ *  inches everything downstream actually nests on. */
+export interface SizeOption {
+  sizeLabel: string;
+  sizeUnit: Unit;
+  width_in: number;
+  height_in: number;
+  gsms: number[];
+}
 import { cachedDerived } from "@/lib/db/rate-cache";
 
 // The distinct rate "options" the estimate form needs to populate its dropdowns
@@ -10,18 +21,30 @@ import { cachedDerived } from "@/lib/db/rate-cache";
 // rows exist). Driven by the DB so adding a rate row in Phase 7 makes it
 // selectable with no code change.
 export interface RateOptions {
-  // Board sheet size per thickness — the live nesting preview needs the stock
-  // sheet dimensions (default 31x41; may differ per thickness) to nest blanks.
-  board: { thickness_mm: number; sheetWidth_in: number; sheetHeight_in: number }[];
-  paper: { sizeLabel: string; gsms: number[] }[];
+  // One entry per (size, thickness). A business can hold several board stock
+  // sheets now, so `sizeLabel` is what an estimate sends to name the one it
+  // wants (EstimateRequest.boardSizeLabel) — thickness alone is ambiguous.
+  board: {
+    sizeLabel: string;
+    sizeUnit: Unit;
+    thickness_mm: number;
+    sheetWidth_in: number;
+    sheetHeight_in: number;
+  }[];
+  // Sheet dimensions ride along with every paper family so the form can filter
+  // and preview in INCHES. It used to regex them back out of `sizeLabel`, which
+  // stops being meaningful the moment a card mixes "70x100" (cm) with "23x36" (in).
+  paper: SizeOption[];
   // White lining stock (plain inner lining — its own rate table, client 2026-07).
-  whitePaper: { sizeLabel: string; gsms: number[] }[];
+  whitePaper: SizeOption[];
   // Board stock (foam-cover material option, client 2-Jul). `type` (client
   // 18-Jul) is part of the identity — one entry per (type, size).
-  artCard: { type: string; sizeLabel: string; gsms: number[] }[];
+  artCard: (SizeOption & { type: string })[];
   // Special paper includes sheet size so the form can display it (editable override per estimate).
   // gsm is display-only (client review 2026-06-27: "Need GSM for special paper also"); may be null.
-  specialPaper: { name: string; sizeLabel: string; sheetWidth_in: number; sheetHeight_in: number; gsm: number | null }[];
+  specialPaper: { name: string; sizeLabel: string; sizeUnit: Unit; sheetWidth_in: number; sheetHeight_in: number; gsm: number | null }[];
+  /** Print sizes with their real dimensions, for the same reason as `paper`. */
+  printSizes: { sizeLabel: string; sizeUnit: Unit; width_in: number; height_in: number }[];
   offsetSizes: string[];
   // Whether single-colour offset rows exist yet (client 6-Jul). False on a live
   // DB that hasn't run migration-offset-colour.sql — the form then disables the
@@ -127,16 +150,16 @@ async function computeRateOptions(
     misc,
     foilFinish,
   ] = await Promise.all([
-    own(supabase.from("board_rates").select("thickness_mm,sheet_width_in,sheet_height_in").order("thickness_mm")),
-    own(supabase.from("paper_rates").select("size_label,gsm").order("size_label").order("gsm")),
-    own(supabase.from("white_paper_rates").select("size_label,gsm").order("size_label").order("gsm")),
-    own(supabase.from("art_card_rates").select("type,size_label,gsm").order("size_label").order("gsm")),
-    own(supabase.from("special_paper_rates").select("name,size_label,width_in,height_in,gsm").order("name")),
-    own(supabase.from("offset_printing_rates").select("size_label, colour, vendor").order("size_label")),
+    own(supabase.from("board_rates").select("size_label,size_unit,thickness_mm,sheet_width_in,sheet_height_in").order("size_label").order("thickness_mm")),
+    own(supabase.from("paper_rates").select("size_label,size_unit,width_in,height_in,gsm").order("size_label").order("gsm")),
+    own(supabase.from("white_paper_rates").select("size_label,size_unit,width_in,height_in,gsm").order("size_label").order("gsm")),
+    own(supabase.from("art_card_rates").select("type,size_label,size_unit,width_in,height_in,gsm").order("size_label").order("gsm")),
+    own(supabase.from("special_paper_rates").select("name,size_label,size_unit,width_in,height_in,gsm").order("name")),
+    own(supabase.from("offset_printing_rates").select("size_label, size_unit, width_in, height_in, colour, vendor").order("size_label")),
     // Defensive: a live DB pre-migration-offset-colour has no `colour` column,
     // so this errors — treated as "single-colour not available yet" below.
     own(supabase.from("offset_printing_rates").select("size_label").eq("colour", "single").limit(1)),
-    own(supabase.from("digital_printing_rates").select("size_label, vendor").order("size_label")),
+    own(supabase.from("digital_printing_rates").select("size_label, size_unit, width_in, height_in, vendor").order("size_label")),
     own(supabase.from("lamination_rates").select("type").order("type")),
     own(supabase.from("foiling_rates").select("color").order("color")),
     own(supabase.from("uv_coating_rates").select("type,unit").order("type")),
@@ -163,15 +186,25 @@ async function computeRateOptions(
     if (r.error) throw new Error(`rate options load failed: ${r.error.message}`);
   }
 
-  // Group paper GSMs under each size (same for white lining stock).
-  const groupBySize = (rows: { size_label: string; gsm: number }[] | null) => {
-    const bySize = new Map<string, number[]>();
+  // Group paper GSMs under each size (same for white lining stock). Every row
+  // of one size carries the same sheet, so the first row's dimensions and unit
+  // describe the group — they are what the form filters and previews on.
+  const groupBySize = (
+    rows: { size_label: string; size_unit?: string; width_in?: number; height_in?: number; gsm: number }[] | null,
+  ): SizeOption[] => {
+    const bySize = new Map<string, SizeOption>();
     for (const row of rows ?? []) {
-      const arr = bySize.get(row.size_label) ?? [];
-      arr.push(Number(row.gsm));
-      bySize.set(row.size_label, arr);
+      const entry = bySize.get(row.size_label) ?? {
+        sizeLabel: row.size_label,
+        sizeUnit: asUnit(row.size_unit),
+        width_in: Number(row.width_in ?? 0),
+        height_in: Number(row.height_in ?? 0),
+        gsms: [],
+      };
+      entry.gsms.push(Number(row.gsm));
+      bySize.set(row.size_label, entry);
     }
-    return [...bySize.entries()].map(([sizeLabel, gsms]) => ({ sizeLabel, gsms }));
+    return [...bySize.values()];
   };
 
   // Board stock, grouped by (type, size). A live DB that hasn't run
@@ -179,7 +212,10 @@ async function computeRateOptions(
   // errored — retry without it and label every row with the legacy default so
   // the foam-cover picker keeps working. (An absent TABLE errors on both, which
   // correctly yields an empty list.)
-  const artCardRows: { type: string; size_label: string; gsm: number }[] = artCard.error
+  const artCardRows: {
+    type: string; size_label: string; size_unit?: string;
+    width_in?: number; height_in?: number; gsm: number;
+  }[] = artCard.error
     ? await (async () => {
         const legacy = await own(supabase
           .from("art_card_rates").select("size_label,gsm").order("size_label").order("gsm"));
@@ -187,16 +223,28 @@ async function computeRateOptions(
           ? []
           : (legacy.data ?? []).map((r) => ({
               type: DEFAULT_BOARD_TYPE, size_label: r.size_label, gsm: Number(r.gsm),
-            }));
+            }));  // pre-migration DB: no dims/unit, so the form falls back to the label
       })()
     : (artCard.data ?? []).map((r) => ({
-        type: String(r.type ?? DEFAULT_BOARD_TYPE), size_label: r.size_label, gsm: Number(r.gsm),
+        type: String(r.type ?? DEFAULT_BOARD_TYPE),
+        size_label: r.size_label,
+        size_unit: r.size_unit,
+        width_in: Number(r.width_in),
+        height_in: Number(r.height_in),
+        gsm: Number(r.gsm),
       }));
   const artCardGrouped = (() => {
-    const byKey = new Map<string, { type: string; sizeLabel: string; gsms: number[] }>();
+    const byKey = new Map<string, SizeOption & { type: string }>();
     for (const r of artCardRows) {
       const key = `${r.type}|${r.size_label}`;
-      const entry = byKey.get(key) ?? { type: r.type, sizeLabel: r.size_label, gsms: [] };
+      const entry = byKey.get(key) ?? {
+        type: r.type,
+        sizeLabel: r.size_label,
+        sizeUnit: asUnit(r.size_unit),
+        width_in: Number(r.width_in ?? 0),
+        height_in: Number(r.height_in ?? 0),
+        gsms: [],
+      };
       entry.gsms.push(r.gsm);
       byKey.set(key, entry);
     }
@@ -205,6 +253,8 @@ async function computeRateOptions(
 
   return {
     board: (board.data ?? []).map((r) => ({
+      sizeLabel: String(r.size_label ?? ""),
+      sizeUnit: asUnit(r.size_unit),
       thickness_mm: Number(r.thickness_mm),
       sheetWidth_in: Number(r.sheet_width_in),
       sheetHeight_in: Number(r.sheet_height_in),
@@ -215,10 +265,27 @@ async function computeRateOptions(
     specialPaper: (special.data ?? []).map((r) => ({
       name: r.name,
       sizeLabel: r.size_label,
+      sizeUnit: asUnit(r.size_unit),
       sheetWidth_in: Number(r.width_in),
       sheetHeight_in: Number(r.height_in),
       gsm: r.gsm == null ? null : Number(r.gsm),
     })),
+    // Both printing tables in one list, deduped by label — the form only needs
+    // to turn a chosen print size into real inches, and a label means the same
+    // sheet whichever table it came from.
+    printSizes: [
+      ...new Map(
+        [...(offset.data ?? []), ...(digital.data ?? [])].map((r) => [
+          r.size_label,
+          {
+            sizeLabel: r.size_label,
+            sizeUnit: asUnit(r.size_unit),
+            width_in: Number(r.width_in),
+            height_in: Number(r.height_in),
+          },
+        ]),
+      ).values(),
+    ],
     // Dedupe: post-migration each size has a multi + a single row (same label).
     offsetSizes: [...new Set((offset.data ?? []).map((r) => r.size_label))],
     offsetSingleColour: !offsetSingle.error && (offsetSingle.data?.length ?? 0) > 0,

@@ -29,7 +29,9 @@ const RIBBON_BOXES = new Set(["drawer_sliding", "double_decker"]);
  * this whole bundle is what gets frozen into rates_snapshot.
  */
 export interface ResolvedRates {
-  board: { costPerSheet: number; sheet: Sheet };
+  /** `sizeLabel`/`sizeUnit` are absent on pre-v9 snapshots — display only, the
+   *  engines read `sheet`. */
+  board: { costPerSheet: number; sheet: Sheet; sizeLabel?: string; sizeUnit?: string };
   /** Printed OR special outer paper. `printSheet` (printed mode) = the printing
    *  size's dimensions — it drives nesting; paper is bought to fit it. */
   outer?: { costPerSheet: number; sheet: Sheet; printSheet?: Sheet };
@@ -239,6 +241,59 @@ async function printRow<T>(
 /** " from \"Vendor\"" for error messages — empty when no vendor was chosen, so
  *  pre-round-10 messages stay byte-identical. */
 const vendorSuffix = (v?: string) => (v ? ` from "${v}"` : "");
+
+/** What `board_rates` gives us for the kappa-board stock sheet. */
+interface BoardStockRow {
+  /** Present on every real row; used to break a legacy tie deterministically. */
+  id?: number;
+  cost_per_sheet: number;
+  sheet_width_in: number;
+  sheet_height_in: number;
+  size_label?: string;
+  size_unit?: string;
+}
+
+/**
+ * The kappa-board stock sheet for a thickness — and, since v9, a SPECIFIC size.
+ *
+ * Deliberately not `row()`. A business can now hold several board sheets at one
+ * thickness (natural key `(size_label, thickness_mm)`), and `row()` throws on a
+ * multi-row match — which is exactly the crash this feature would otherwise
+ * have introduced for every estimate saved before sheet sizes existed.
+ *
+ * With a label: an exact lookup, unique by the key.
+ *
+ * Without one (a pre-v9 `specs_snapshot`): resolve by thickness and pick
+ * DETERMINISTICALLY — prefer the 31x41 sheet, which is what the old column
+ * default gave every row, so a legacy estimate reprices against the sheet it
+ * was actually costed on. Failing that, the lowest id, i.e. the oldest row.
+ * Never throws on ambiguity: an old estimate must stay openable no matter how
+ * many sizes its owner has added since.
+ */
+export async function boardStockRow(
+  supabase: SupabaseClient,
+  thickness_mm: number,
+  sizeLabel: string | undefined,
+  ownerId: string | null,
+): Promise<BoardStockRow | null> {
+  const snapshot = await rateTable(supabase, "board_rates");
+  if (snapshot.error) {
+    throw new Error(`rate lookup failed for board_rates: ${snapshot.error.message}`);
+  }
+  const filters: Record<string, string | number | null> = {
+    thickness_mm,
+    owner_id: ownerId,
+  };
+  if (sizeLabel) filters.size_label = sizeLabel;
+  const matches = matchRows(snapshot.rows, "board_rates", filters) as unknown as BoardStockRow[];
+  if (matches.length <= 1) return matches[0] ?? null;
+
+  const legacyDefault = matches.find(
+    (r) => Number(r.sheet_width_in) === 31 && Number(r.sheet_height_in) === 41,
+  );
+  if (legacyDefault) return legacyDefault;
+  return [...matches].sort((a, b) => Number(a.id ?? 0) - Number(b.id ?? 0))[0];
+}
 
 async function boardRow(
   supabase: SupabaseClient,
@@ -676,14 +731,10 @@ export async function loadEstimateRates(
 ): Promise<ResolvedRates> {
   // Board (required) — sheet size comes from the rate row.
   const board = need(
-    await row<{ cost_per_sheet: number; sheet_width_in: number; sheet_height_in: number }>(
-      supabase,
-      "board_rates",
-      "cost_per_sheet, sheet_width_in, sheet_height_in",
-      { thickness_mm: req.boardThickness_mm },
-      ownerId,
-    ),
-    `board ${req.boardThickness_mm}mm`,
+    await boardStockRow(supabase, req.boardThickness_mm, req.boardSizeLabel, ownerId),
+    req.boardSizeLabel
+      ? `board ${req.boardSizeLabel} at ${req.boardThickness_mm}mm`
+      : `board ${req.boardThickness_mm}mm`,
   );
 
   // Outer wrap + printing.
@@ -988,7 +1039,15 @@ export async function loadEstimateRates(
   const printFoilWastagePct = (await configValue(supabase, "app_config", "print_foil_wastage_pct", ownerId)) ?? 15;
 
   return {
-    board: { costPerSheet: board.cost_per_sheet, sheet: { width_in: board.sheet_width_in, height_in: board.sheet_height_in } },
+    board: {
+      costPerSheet: board.cost_per_sheet,
+      sheet: { width_in: board.sheet_width_in, height_in: board.sheet_height_in },
+      // Frozen into rates_snapshot for display: which sheet was used, and the
+      // unit its owner entered it in. Spread conditionally so a pre-v9 DB
+      // (no such columns) still produces a byte-identical snapshot.
+      ...(board.size_label ? { sizeLabel: board.size_label } : {}),
+      ...(board.size_unit ? { sizeUnit: board.size_unit } : {}),
+    },
     outer,
     inner,
     printing,

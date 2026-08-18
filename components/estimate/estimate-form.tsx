@@ -71,7 +71,7 @@ import {
 } from "@/components/estimate/per-component-wrap";
 import { ClientCombobox } from "@/components/clients/client-combobox";
 import { BOX_LABELS } from "@/lib/box-types";
-import { UNIT_LABELS, dimStep, fromDim, toDim, type Unit } from "@/lib/units";
+import { UNIT_LABELS, dimStep, formatSheet, fromDim, toDim, type Unit } from "@/lib/units";
 import { useShake } from "@/hooks/use-shake";
 
 // Fallback only, shown before rate options load — the real list comes from
@@ -494,6 +494,10 @@ export function EstimateForm({
   // rate divides by the ORDERED quantity.
   const [productionQty, setProductionQty] = useState("");
   const [boardThickness, setBoardThickness] = useState(1.5);
+  // Which board STOCK SHEET to price against. A business can hold several now,
+  // so thickness alone no longer identifies a row. Empty = "whatever the card
+  // has", which is also what a pre-v9 saved estimate hydrates to.
+  const [boardSize, setBoardSize] = useState("");
   const [vars, setVars] = useState<BoxVariables>(defaultVars("telescopic"));
   const [unit, setUnit] = useState<Unit>("in");
   // Board cutting method (client 7-Jul): auto = allow combination nesting (kept
@@ -764,6 +768,9 @@ export function EstimateForm({
         : "",
     );
     setBoardThickness(s.boardThickness_mm);
+    // Absent on snapshots saved before board sheets were selectable; the server
+    // resolves that to the legacy 31x41 sheet (see boardStockRow in lib/db/rates).
+    setBoardSize(s.boardSizeLabel ?? "");
     setVars(s.vars ?? defaultVars(s.boxType));
     setUnit("in"); // specs are stored in inches
 
@@ -1077,20 +1084,48 @@ export function EstimateForm({
   const innerPrintingSizes =
     innerPrintingType === "offset" ? options?.offsetSizes ?? [] : options?.digitalSizes ?? [];
 
+  // Board sheets available at the chosen thickness.
+  const boardSizesForThickness = useMemo(
+    () => (options?.board ?? []).filter((b) => b.thickness_mm === boardThickness),
+    [options, boardThickness],
+  );
+  // Derived rather than synced through an effect: changing thickness can strip
+  // the selected sheet from the list, and falling back here keeps the select
+  // and the request agreeing without a setState-in-effect round trip.
+  const effectiveBoardSize = boardSizesForThickness.some((b) => b.sizeLabel === boardSize)
+    ? boardSize
+    : boardSizesForThickness[0]?.sizeLabel ?? "";
+
   // --- Print size drives paper size (client doc Step 1) ---------------------
-  // Parse a "23x36"-style size label into inches; null when it doesn't parse.
+  // Parse a "23x36"-style size label; null when it doesn't parse. LAST RESORT
+  // only — a label's numbers are written in the row's own unit, so on a card
+  // mixing "70x100" (cm) with "23x36" (in) they are not comparable. Everything
+  // below prefers the real inches the rate row carries, and falls back here
+  // only for a pre-migration DB that has no dimensions in RateOptions.
   const parseSize = (label: string): { w: number; h: number } | null => {
     const m = label.match(/^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)$/i);
     return m ? { w: Number(m[1]), h: Number(m[2]) } : null;
   };
+  /** A stock size in INCHES: real dimensions when we have them, else the label. */
+  const inchesOf = (
+    src: { sizeLabel: string; width_in?: number; height_in?: number } | undefined,
+  ): { w: number; h: number } | null => {
+    if (!src) return null;
+    if (src.width_in && src.height_in) return { w: src.width_in, h: src.height_in };
+    return parseSize(src.sizeLabel);
+  };
+  /** The chosen print size, in inches. */
+  const printInches = (printLabel: string) =>
+    inchesOf(options?.printSizes.find((p) => p.sizeLabel === printLabel)) ??
+    parseSize(printLabel);
   // Paper sizes that can be cut down to the chosen print size (either
-  // orientation). Falls back to ALL sizes when labels don't parse.
+  // orientation). Falls back to ALL sizes when nothing resolves.
   const papersForPrint = (printLabel: string) => {
     const all = options?.paper ?? [];
-    const p = parseSize(printLabel);
+    const p = printInches(printLabel);
     if (!p) return all;
     const fit = all.filter((paper) => {
-      const s = parseSize(paper.sizeLabel);
+      const s = inchesOf(paper);
       if (!s) return false;
       return (p.w <= s.w && p.h <= s.h) || (p.h <= s.w && p.w <= s.h);
     });
@@ -1102,12 +1137,17 @@ export function EstimateForm({
     let best = fit[0]?.sizeLabel ?? "";
     let bestArea = Infinity;
     for (const paper of fit) {
-      const s = parseSize(paper.sizeLabel);
+      const s = inchesOf(paper);
       const area = s ? s.w * s.h : Infinity;
       if (area < bestArea) { bestArea = area; best = paper.sizeLabel; }
     }
     return best;
   };
+  /** How a stock size reads in a dropdown: "70 × 100 cm" / "23 × 36 in". */
+  const sizeText = (src: { sizeLabel: string; sizeUnit?: Unit; width_in?: number; height_in?: number }) =>
+    src.width_in && src.height_in
+      ? formatSheet(src.width_in, src.height_in, src.sizeUnit ?? "in")
+      : src.sizeLabel;
   // When a print size is picked, re-point the paper selection at the smallest
   // compatible sheet (keeping the current one if it still fits).
   const syncPaperToPrint = (printLabel: string, current: string, setSize: (s: string) => void, setG: (g: number) => void) => {
@@ -1443,6 +1483,7 @@ export function EstimateForm({
       // Production run (client item 3) — omitted when it matches the order.
       productionQuantity: prodQtyValue > quantity ? prodQtyValue : undefined,
       boardThickness_mm: boardThickness,
+      boardSizeLabel: effectiveBoardSize || undefined,
       // Partial estimate: excluded sections' selections are omitted from the
       // request (and re-enforced server-side); toggles ride in the snapshot.
       sections: { board: secBoard, wrapping: secWrapping, inserts: secInserts },
@@ -1554,14 +1595,23 @@ export function EstimateForm({
   // each optional material is included only when its sheet dims are known (>0).
   const previewInput = useMemo<MaterialInput | null>(() => {
     if (!options || !dimsValid) return null;
-    const boardRow = options.board.find((b) => b.thickness_mm === boardThickness);
+    const boardRow =
+      options.board.find(
+        (b) => b.thickness_mm === boardThickness && (!effectiveBoardSize || b.sizeLabel === effectiveBoardSize),
+      ) ?? options.board.find((b) => b.thickness_mm === boardThickness);
     if (!boardRow) return null; // board sheet size is required to nest anything
 
     const previewDims = hideH
       ? { ...dims, height_in: (vars.bottomHeight_in ?? 0) + (vars.neckHeight_in ?? 0) }
       : dims;
+    // Real inches off the rate row wherever we have them — the label's numbers
+    // are in the row's OWN unit, so parsing them mixes cm with inches.
     const sheetOf = (label: string) => {
-      const s = parseSize(label);
+      const src =
+        options.paper.find((x) => x.sizeLabel === label) ??
+        options.whitePaper.find((x) => x.sizeLabel === label) ??
+        options.printSizes.find((x) => x.sizeLabel === label);
+      const s = inchesOf(src) ?? parseSize(label);
       return s ? { width_in: s.w, height_in: s.h } : null;
     };
 
@@ -1793,7 +1843,7 @@ export function EstimateForm({
     return input;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    options, dimsValid, boxType, dims, vars, quantity, prodQtyValue, boardThickness, hideH, nestingMode,
+    options, dimsValid, boxType, dims, vars, quantity, prodQtyValue, boardThickness, effectiveBoardSize, hideH, nestingMode,
     perComponentOn, componentWraps, componentNames,
     printingMode, secBoard, secWrapping, secInserts,
     outerMode, outerPaperSize, printingSize, folding, specialSheetW, specialSheetH,
@@ -1982,10 +2032,36 @@ export function EstimateForm({
               <div className="flex flex-col gap-2">
                 <Label htmlFor="thickness">Board thickness (mm)</Label>
                 <NativeSelect id="thickness" value={boardThickness} onChange={num(setBoardThickness)}>
-                  {(options?.board.length ? options.board.map((b) => b.thickness_mm) : BOARD_THICKNESSES)
-                    .map((t) => <option key={t} value={t}>{t} mm</option>)}
+                  {/* One entry per thickness — a business may stock the same
+                      thickness in several sheet sizes, which the size select
+                      below distinguishes. */}
+                  {(options?.board.length
+                    ? [...new Set(options.board.map((b) => b.thickness_mm))]
+                    : BOARD_THICKNESSES
+                  ).map((t) => <option key={t} value={t}>{t} mm</option>)}
                 </NativeSelect>
               </div>
+              {/* Board stock sheet. Shown whenever the card has one at all, not
+                  only when there is a choice: which sheet a quote is costed on
+                  is worth seeing even when there is exactly one, and hiding the
+                  control until a second size exists made the feature invisible
+                  to the person who had just added it. */}
+              {boardSizesForThickness.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="boardSize">Board sheet</Label>
+                  <NativeSelect
+                    id="boardSize"
+                    value={effectiveBoardSize}
+                    onChange={(e) => setBoardSize(e.target.value)}
+                  >
+                    {boardSizesForThickness.map((b) => (
+                      <option key={b.sizeLabel} value={b.sizeLabel}>
+                        {formatSheet(b.sheetWidth_in, b.sheetHeight_in, b.sizeUnit)}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </div>
+              )}
             </div>
             {prodQtyValue > quantity && (
               <p className="-mt-1 text-xs text-muted-foreground">
@@ -2101,7 +2177,7 @@ export function EstimateForm({
                     <div className="flex flex-col gap-2">
                       <Label>Paper size</Label>
                       <NativeSelect value={outerPaperSize} onChange={(e) => { setOuterPaperSize(e.target.value); setOuterGsm(gsmsFor(e.target.value)[0] ?? 0); }}>
-                        {papersForPrint(printingSize).map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{p.sizeLabel}</option>)}
+                        {papersForPrint(printingSize).map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{sizeText(p)}</option>)}
                       </NativeSelect>
                     </div>
                     <div className="flex flex-col gap-2">
@@ -2226,7 +2302,7 @@ export function EstimateForm({
               {innerMode === "white" && options && (
                 <div className="grid grid-cols-2 gap-3">
                   <NativeSelect aria-label="White paper size" value={innerWhiteSize} onChange={(e) => { setInnerWhiteSize(e.target.value); setInnerWhiteGsm(options.whitePaper.find((p) => p.sizeLabel === e.target.value)?.gsms[0] ?? 0); }}>
-                    {options.whitePaper.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{p.sizeLabel}</option>)}
+                    {options.whitePaper.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{sizeText(p)}</option>)}
                   </NativeSelect>
                   <NativeSelect aria-label="White paper GSM" value={innerWhiteGsm} onChange={num(setInnerWhiteGsm)}>
                     {(options.whitePaper.find((p) => p.sizeLabel === innerWhiteSize)?.gsms ?? []).map((g) => <option key={g} value={g}>{g} gsm</option>)}
@@ -2260,7 +2336,7 @@ export function EstimateForm({
                   ) : (
                     <>
                       <NativeSelect aria-label="Inner paper size" value={innerPaperSize} onChange={(e) => { setInnerPaperSize(e.target.value); setInnerGsm(gsmsFor(e.target.value)[0] ?? 0); }}>
-                        {papersForPrint(innerPrintingSize).map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{p.sizeLabel}</option>)}
+                        {papersForPrint(innerPrintingSize).map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{sizeText(p)}</option>)}
                       </NativeSelect>
                       <NativeSelect aria-label="Inner paper GSM" value={innerGsm} onChange={num(setInnerGsm)}>
                         {gsmsFor(innerPaperSize).map((g) => <option key={g} value={g}>{g} gsm</option>)}
@@ -2644,7 +2720,7 @@ export function EstimateForm({
                               )}
                               <NativeSelect aria-label="Cover paper size" value={c.paperSize}
                                 onChange={(e) => patchCover({ paperSize: e.target.value, gsm: coverList.find((x) => x.sizeLabel === e.target.value)?.gsms[0] ?? 0 })}>
-                                {coverPapers.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{p.sizeLabel}</option>)}
+                                {coverPapers.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{sizeText(p)}</option>)}
                               </NativeSelect>
                               <NativeSelect aria-label="Cover paper GSM" value={c.gsm}
                                 onChange={(e) => patchCover({ gsm: Number(e.target.value) })}>
@@ -2772,7 +2848,7 @@ export function EstimateForm({
                     {revTopEnabled && (
                       <div className="grid grid-cols-2 gap-3">
                         <NativeSelect aria-label="Top paper size" value={revTopSize} onChange={(e) => { setRevTopSize(e.target.value); setRevTopGsm(gsmsFor(e.target.value)[0] ?? 0); }}>
-                          {options.paper.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{p.sizeLabel}</option>)}
+                          {options.paper.map((p) => <option key={p.sizeLabel} value={p.sizeLabel}>{sizeText(p)}</option>)}
                         </NativeSelect>
                         <NativeSelect aria-label="Top paper GSM" value={revTopGsm} onChange={num(setRevTopGsm)}>
                           {gsmsFor(revTopSize).map((g) => <option key={g} value={g}>{g} gsm</option>)}

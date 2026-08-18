@@ -20,6 +20,7 @@ import {
 import type { Blank, BoxType, CardStockSelection, ChargeLine, EstimateRequest } from "@/types";
 import { sleeveBlank } from "@/lib/formulas/sleeve";
 import { fitAllowanceIn } from "@/lib/formulas/fit";
+import { labelAgreesWithSheet, type Unit } from "@/lib/units";
 import { chargeTotal } from "./charges";
 import { EstimateError } from "./errors";
 import { resolveAutoPrinting } from "./auto-printing";
@@ -468,19 +469,23 @@ function paperLabelOf(
 }
 
 /**
- * Does a "WxH" size label agree with the sheet dimensions stored on its rate
- * row (either orientation)? Labels that aren't a plain WxH pair are treated as
- * agreeing — plenty of legitimate names ("A4", "Custom") never parse.
+ * Does a "WxH" size label agree with the sheet dimensions on its rate row?
+ *
+ * Thin wrapper over the shared helper in lib/units.ts, which the rate card's
+ * warning icon also uses — the two had drifted into separate regexes.
+ *
+ * `unit` is the row's own `size_unit`. It matters because the label is written
+ * in that unit while the sheet is always STORED in inches: a 70x100 cm row
+ * reads "70x100" against 27.559 x 39.370 in, and comparing those raw would
+ * report a mismatch on a perfectly correct row.
+ *
+ * Still fails OPEN for labels that aren't a plain WxH pair ("A4", "Custom").
  */
-export function labelMatchesSheet(label: string, sheet: Sheet): boolean {
-  const m = label.match(/^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$/i);
-  if (!m) return true;
-  const a = Number(m[1]);
-  const b = Number(m[2]);
-  return (
-    (a === sheet.width_in && b === sheet.height_in) ||
-    (a === sheet.height_in && b === sheet.width_in)
-  );
+/** Units a size label might have been written in, for the tolerant check below. */
+const SIZE_UNITS: Unit[] = ["in", "cm", "mm"];
+
+export function labelMatchesSheet(label: string, sheet: Sheet, unit: Unit = "in"): boolean {
+  return labelAgreesWithSheet(label, sheet, unit);
 }
 
 export function buildMaterialInput(req: EstimateRequest, rates: ResolvedRates): MaterialInput {
@@ -551,7 +556,12 @@ export function buildMaterialInput(req: EstimateRequest, rates: ResolvedRates): 
           `The ${label} printing size (${p.width_in}x${p.height_in} in) is larger than the ` +
             `selected paper ${sheetDesc}. Pick a paper size that fits the print, or a ` +
             `smaller print size.` +
-            (sizeLabel && !labelMatchesSheet(sizeLabel, s)
+            // Only cry mismatch when the label disagrees under EVERY unit. The
+            // resolved rates don't carry the row's size_unit, and a metric row
+            // legitimately reads "70x100" against 27.559 x 39.370 in — checking
+            // all three is cheaper than plumbing the unit through ResolvedRates
+            // for a hint appended to an error thrown for a different reason.
+            (sizeLabel && !SIZE_UNITS.some((u) => labelMatchesSheet(sizeLabel, s, u))
               ? ` Note: that paper's name does not match its stored sheet size — check the ` +
                 `row on the Rates page.`
               : ""),

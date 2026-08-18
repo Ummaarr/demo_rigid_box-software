@@ -35,14 +35,14 @@
 -- ===========================================================================
 -- UNITED STATES (USD)
 -- ===========================================================================
-insert into public.board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('USD', 1.2, 0.72, true),
-  ('USD', 1.5, 0.90, true),
-  ('USD', 1.8, 1.08, true),
-  ('USD', 2.0, 1.20, true),
-  ('USD', 2.5, 1.50, true),
-  ('USD', 3.0, 1.80, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('USD', '31x41', 1.2, 0.72, true),
+  ('USD', '31x41', 1.5, 0.90, true),
+  ('USD', '31x41', 1.8, 1.08, true),
+  ('USD', '31x41', 2.0, 1.20, true),
+  ('USD', '31x41', 2.5, 1.50, true),
+  ('USD', '31x41', 3.0, 1.80, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 insert into public.paper_rates (currency, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
   ('USD', '23x36', 23, 36, 120, 0.32, true),
@@ -169,14 +169,14 @@ insert into public.foam_rates (currency, type, thickness_mm, sheet_width_in, she
   ('USD', 'PU',   20, 40, 80, 35.00, 1.75, true)
 on conflict (currency, type, thickness_mm) where owner_id is null do nothing;
 
-insert into public.reverse_board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('USD', 1.2, 0.72, true),
-  ('USD', 1.5, 0.90, true),
-  ('USD', 1.8, 1.08, true),
-  ('USD', 2.0, 1.20, true),
-  ('USD', 2.5, 1.50, true),
-  ('USD', 3.0, 1.80, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.reverse_board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('USD', '31x41', 1.2, 0.72, true),
+  ('USD', '31x41', 1.5, 0.90, true),
+  ('USD', '31x41', 1.8, 1.08, true),
+  ('USD', '31x41', 2.0, 1.20, true),
+  ('USD', '31x41', 2.5, 1.50, true),
+  ('USD', '31x41', 3.0, 1.80, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 insert into public.consumable_rates (currency, name, rate, unit, is_dummy) values
   ('USD', 'tape', 0.20, 'per_tray_or_lid', true)
@@ -221,28 +221,39 @@ on conflict (currency, name) where owner_id is null do nothing;
 -- ===========================================================================
 -- UNITED KINGDOM (GBP)
 -- ===========================================================================
-insert into public.board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('GBP', 1.2, 0.60, true),
-  ('GBP', 1.5, 0.75, true),
-  ('GBP', 1.8, 0.90, true),
-  ('GBP', 2.0, 1.00, true),
-  ('GBP', 2.5, 1.25, true),
-  ('GBP', 3.0, 1.50, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('GBP', '31x41', 1.2, 0.60, true),
+  ('GBP', '31x41', 1.5, 0.75, true),
+  ('GBP', '31x41', 1.8, 0.90, true),
+  ('GBP', '31x41', 2.0, 1.00, true),
+  ('GBP', '31x41', 2.5, 1.25, true),
+  ('GBP', '31x41', 3.0, 1.50, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
-insert into public.paper_rates (currency, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
-  ('GBP', '23x36', 23, 36, 120, 0.25, true),
-  ('GBP', '23x36', 23, 36, 130, 0.30, true),
-  ('GBP', '23x36', 23, 36, 157, 0.35, true),
-  ('GBP', '23x36', 23, 36, 170, 0.40, true),
-  ('GBP', '25x36', 25, 36, 120, 0.30, true),
-  ('GBP', '25x36', 25, 36, 130, 0.32, true),
-  ('GBP', '25x36', 25, 36, 157, 0.38, true),
-  ('GBP', '25x36', 25, 36, 170, 0.42, true),
-  ('GBP', '30x40', 30, 40, 120, 0.40, true),
-  ('GBP', '30x40', 30, 40, 130, 0.42, true),
-  ('GBP', '30x40', 30, 40, 157, 0.50, true),
-  ('GBP', '30x40', 30, 40, 170, 0.55, true)
+insert into public.paper_rates (currency, size_label, size_unit, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
+  ('GBP', '23x36', 'in', 23, 36, 120, 0.25, true),
+  ('GBP', '23x36', 'in', 23, 36, 130, 0.30, true),
+  ('GBP', '23x36', 'in', 23, 36, 157, 0.35, true),
+  ('GBP', '23x36', 'in', 23, 36, 170, 0.40, true),
+  ('GBP', '25x36', 'in', 25, 36, 120, 0.30, true),
+  ('GBP', '25x36', 'in', 25, 36, 130, 0.32, true),
+  ('GBP', '25x36', 'in', 25, 36, 157, 0.38, true),
+  ('GBP', '25x36', 'in', 25, 36, 170, 0.42, true),
+  ('GBP', '30x40', 'in', 30, 40, 120, 0.40, true),
+  ('GBP', '30x40', 'in', 30, 40, 130, 0.42, true),
+  ('GBP', '30x40', 'in', 30, 40, 157, 0.50, true),
+  ('GBP', '30x40', 'in', 30, 40, 170, 0.55, true),
+  -- Metric stock. UK mills sell 70x100 and 50x70 cm; the
+  -- inches below are those sheets converted, and size_unit 'cm' is what
+  -- makes them read back as centimetres on the rate card.
+  ('GBP', '70x100', 'cm', 27.5591, 39.3701, 120, 0.44, true),
+  ('GBP', '70x100', 'cm', 27.5591, 39.3701, 130, 0.47, true),
+  ('GBP', '70x100', 'cm', 27.5591, 39.3701, 157, 0.55, true),
+  ('GBP', '70x100', 'cm', 27.5591, 39.3701, 170, 0.61, true),
+  ('GBP', '50x70', 'cm', 19.685, 27.5591, 120, 0.22, true),
+  ('GBP', '50x70', 'cm', 19.685, 27.5591, 130, 0.24, true),
+  ('GBP', '50x70', 'cm', 19.685, 27.5591, 157, 0.28, true),
+  ('GBP', '50x70', 'cm', 19.685, 27.5591, 170, 0.31, true)
 on conflict (currency, size_label, gsm) where owner_id is null do nothing;
 
 insert into public.white_paper_rates (currency, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
@@ -355,14 +366,14 @@ insert into public.foam_rates (currency, type, thickness_mm, sheet_width_in, she
   ('GBP', 'PU',   20, 40, 80, 28.00, 1.40, true)
 on conflict (currency, type, thickness_mm) where owner_id is null do nothing;
 
-insert into public.reverse_board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('GBP', 1.2, 0.60, true),
-  ('GBP', 1.5, 0.75, true),
-  ('GBP', 1.8, 0.90, true),
-  ('GBP', 2.0, 1.00, true),
-  ('GBP', 2.5, 1.25, true),
-  ('GBP', 3.0, 1.50, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.reverse_board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('GBP', '31x41', 1.2, 0.60, true),
+  ('GBP', '31x41', 1.5, 0.75, true),
+  ('GBP', '31x41', 1.8, 0.90, true),
+  ('GBP', '31x41', 2.0, 1.00, true),
+  ('GBP', '31x41', 2.5, 1.25, true),
+  ('GBP', '31x41', 3.0, 1.50, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 insert into public.consumable_rates (currency, name, rate, unit, is_dummy) values
   ('GBP', 'tape', 0.15, 'per_tray_or_lid', true)
@@ -407,28 +418,39 @@ on conflict (currency, name) where owner_id is null do nothing;
 -- ===========================================================================
 -- UNITED ARAB EMIRATES (AED)
 -- ===========================================================================
-insert into public.board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('AED', 1.2, 1.55, true),
-  ('AED', 1.5, 1.95, true),
-  ('AED', 1.8, 2.35, true),
-  ('AED', 2.0, 2.60, true),
-  ('AED', 2.5, 3.25, true),
-  ('AED', 3.0, 3.90, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('AED', '31x41', 1.2, 1.55, true),
+  ('AED', '31x41', 1.5, 1.95, true),
+  ('AED', '31x41', 1.8, 2.35, true),
+  ('AED', '31x41', 2.0, 2.60, true),
+  ('AED', '31x41', 2.5, 3.25, true),
+  ('AED', '31x41', 3.0, 3.90, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
-insert into public.paper_rates (currency, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
-  ('AED', '23x36', 23, 36, 120, 0.55, true),
-  ('AED', '23x36', 23, 36, 130, 0.65, true),
-  ('AED', '23x36', 23, 36, 157, 0.75, true),
-  ('AED', '23x36', 23, 36, 170, 0.85, true),
-  ('AED', '25x36', 25, 36, 120, 0.65, true),
-  ('AED', '25x36', 25, 36, 130, 0.70, true),
-  ('AED', '25x36', 25, 36, 157, 0.85, true),
-  ('AED', '25x36', 25, 36, 170, 0.90, true),
-  ('AED', '30x40', 30, 40, 120, 0.85, true),
-  ('AED', '30x40', 30, 40, 130, 0.90, true),
-  ('AED', '30x40', 30, 40, 157, 1.10, true),
-  ('AED', '30x40', 30, 40, 170, 1.20, true)
+insert into public.paper_rates (currency, size_label, size_unit, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
+  ('AED', '23x36', 'in', 23, 36, 120, 0.55, true),
+  ('AED', '23x36', 'in', 23, 36, 130, 0.65, true),
+  ('AED', '23x36', 'in', 23, 36, 157, 0.75, true),
+  ('AED', '23x36', 'in', 23, 36, 170, 0.85, true),
+  ('AED', '25x36', 'in', 25, 36, 120, 0.65, true),
+  ('AED', '25x36', 'in', 25, 36, 130, 0.70, true),
+  ('AED', '25x36', 'in', 25, 36, 157, 0.85, true),
+  ('AED', '25x36', 'in', 25, 36, 170, 0.90, true),
+  ('AED', '30x40', 'in', 30, 40, 120, 0.85, true),
+  ('AED', '30x40', 'in', 30, 40, 130, 0.90, true),
+  ('AED', '30x40', 'in', 30, 40, 157, 1.10, true),
+  ('AED', '30x40', 'in', 30, 40, 170, 1.20, true),
+  -- Metric stock. Gulf mills sell 70x100 and 50x70 cm; the
+  -- inches below are those sheets converted, and size_unit 'cm' is what
+  -- makes them read back as centimetres on the rate card.
+  ('AED', '70x100', 'cm', 27.5591, 39.3701, 120, 2.1, true),
+  ('AED', '70x100', 'cm', 27.5591, 39.3701, 130, 2.25, true),
+  ('AED', '70x100', 'cm', 27.5591, 39.3701, 157, 2.65, true),
+  ('AED', '70x100', 'cm', 27.5591, 39.3701, 170, 2.9, true),
+  ('AED', '50x70', 'cm', 19.685, 27.5591, 120, 1.05, true),
+  ('AED', '50x70', 'cm', 19.685, 27.5591, 130, 1.13, true),
+  ('AED', '50x70', 'cm', 19.685, 27.5591, 157, 1.33, true),
+  ('AED', '50x70', 'cm', 19.685, 27.5591, 170, 1.45, true)
 on conflict (currency, size_label, gsm) where owner_id is null do nothing;
 
 insert into public.white_paper_rates (currency, size_label, width_in, height_in, gsm, cost_per_sheet, is_dummy) values
@@ -541,14 +563,14 @@ insert into public.foam_rates (currency, type, thickness_mm, sheet_width_in, she
   ('AED', 'PU',   20, 40, 80, 77.00, 3.85, true)
 on conflict (currency, type, thickness_mm) where owner_id is null do nothing;
 
-insert into public.reverse_board_rates (currency, thickness_mm, cost_per_sheet, is_dummy) values
-  ('AED', 1.2, 1.55, true),
-  ('AED', 1.5, 1.95, true),
-  ('AED', 1.8, 2.35, true),
-  ('AED', 2.0, 2.60, true),
-  ('AED', 2.5, 3.25, true),
-  ('AED', 3.0, 3.90, true)
-on conflict (currency, thickness_mm, sheet_width_in, sheet_height_in) where owner_id is null do nothing;
+insert into public.reverse_board_rates (currency, size_label, thickness_mm, cost_per_sheet, is_dummy) values
+  ('AED', '31x41', 1.2, 1.55, true),
+  ('AED', '31x41', 1.5, 1.95, true),
+  ('AED', '31x41', 1.8, 2.35, true),
+  ('AED', '31x41', 2.0, 2.60, true),
+  ('AED', '31x41', 2.5, 3.25, true),
+  ('AED', '31x41', 3.0, 3.90, true)
+on conflict (currency, size_label, thickness_mm) where owner_id is null do nothing;
 
 insert into public.consumable_rates (currency, name, rate, unit, is_dummy) values
   ('AED', 'tape', 0.40, 'per_tray_or_lid', true)

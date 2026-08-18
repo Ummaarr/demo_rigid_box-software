@@ -95,12 +95,20 @@ $$;
 create table if not exists public.board_rates (
   id              bigint generated always as identity primary key,
   thickness_mm    numeric not null,
+  -- Names the stock sheet, so an estimate can ask for a SPECIFIC one. Board is
+  -- resolved by thickness in lib/db/rates.ts through a helper that throws on a
+  -- multi-row match, so without a label a second size at the same thickness is
+  -- legal in SQL and fatal at estimate time. See migration-sheet-sizes.sql.
+  size_label      text not null,
   sheet_width_in  numeric not null default 31,
   sheet_height_in numeric not null default 41,
+  -- The unit this sheet was ENTERED in. Display only — the _in columns above
+  -- remain the storage contract.
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   cost_per_sheet  numeric not null check (cost_per_sheet >= 0),
   is_dummy        boolean not null default true,
   updated_at      timestamptz not null default now(),
-  unique (thickness_mm, sheet_width_in, sheet_height_in)
+  unique (size_label, thickness_mm)
 );
 
 -- Printed wrapping / lining paper stock (by size + GSM). DUMMY.
@@ -111,6 +119,7 @@ create table if not exists public.paper_rates (
   height_in      numeric not null,
   gsm            integer not null,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default true,
   updated_at     timestamptz not null default now(),
   unique (size_label, gsm)
@@ -126,6 +135,7 @@ create table if not exists public.white_paper_rates (
   height_in      numeric not null,
   gsm            integer not null,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default true,
   updated_at     timestamptz not null default now(),
   unique (size_label, gsm)
@@ -145,6 +155,7 @@ create table if not exists public.art_card_rates (
   height_in      numeric not null,
   gsm            integer not null,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default true,
   updated_at     timestamptz not null default now(),
   unique (type, size_label, gsm)
@@ -181,6 +192,7 @@ create table if not exists public.special_paper_rates (
   height_in      numeric not null,
   gsm            integer,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default true,
   updated_at     timestamptz not null default now(),
   unique (name, size_label)
@@ -196,6 +208,7 @@ create table if not exists public.offset_printing_rates (
   height_in       numeric not null,
   first_1000      numeric not null check (first_1000 >= 0),
   additional_1000 numeric not null check (additional_1000 >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy        boolean not null default false,
   updated_at      timestamptz not null default now()
   -- NOTE: the unique key is (size_label, colour, VENDOR) — round 10, so one
@@ -210,6 +223,7 @@ create table if not exists public.digital_printing_rates (
   width_in       numeric not null,
   height_in      numeric not null,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default false,
   updated_at     timestamptz not null default now()
   -- unique (size_label, vendor) is declared after the v3 block below.
@@ -300,6 +314,7 @@ create table if not exists public.foam_rates (
   sheet_height_in numeric not null,
   cost_per_sheet  numeric not null check (cost_per_sheet >= 0),
   rate_per_mm     numeric check (rate_per_mm >= 0),
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy        boolean not null default true,
   updated_at      timestamptz not null default now(),
   unique (type, thickness_mm)
@@ -311,12 +326,20 @@ alter table public.foam_rates add column if not exists rate_per_mm numeric check
 create table if not exists public.reverse_board_rates (
   id              bigint generated always as identity primary key,
   thickness_mm    numeric not null,
+  -- Names the stock sheet, so an estimate can ask for a SPECIFIC one. Board is
+  -- resolved by thickness in lib/db/rates.ts through a helper that throws on a
+  -- multi-row match, so without a label a second size at the same thickness is
+  -- legal in SQL and fatal at estimate time. See migration-sheet-sizes.sql.
+  size_label      text not null,
   sheet_width_in  numeric not null default 31,
   sheet_height_in numeric not null default 41,
+  -- The unit this sheet was ENTERED in. Display only — the _in columns above
+  -- remain the storage contract.
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   cost_per_sheet  numeric not null check (cost_per_sheet >= 0),
   is_dummy        boolean not null default true,
   updated_at      timestamptz not null default now(),
-  unique (thickness_mm, sheet_width_in, sheet_height_in)
+  unique (size_label, thickness_mm)
 );
 
 -- Fixed consumables: tape (REAL 2/tray), glue + metlock (DUMMY).
@@ -390,6 +413,7 @@ create table if not exists public.window_rates (
   film_height_in numeric not null,
   cost_per_sheet numeric not null check (cost_per_sheet >= 0),
   image_path     text,
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy       boolean not null default true,
   updated_at     timestamptz not null default now()
 );
@@ -407,6 +431,7 @@ create table if not exists public.misc_rates (
   price        numeric not null check (price >= 0),
   vendor       text,
   image_path   text,
+  size_unit       text not null default 'in' check (size_unit in ('in','cm','mm')),
   is_dummy     boolean not null default true,
   updated_at   timestamptz not null default now(),
   updated_by   text
@@ -481,7 +506,7 @@ declare
 begin
   for rec in
     select * from (values
-      ('board_rates',         'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('board_rates',         'size_label, thickness_mm'),
       ('paper_rates',         'size_label, gsm'),
       ('white_paper_rates',   'size_label, gsm'),
       ('art_card_rates',      'type, size_label, gsm'),
@@ -492,7 +517,7 @@ begin
       ('magnet_rates',        'diameter_mm, thickness_mm'),
       ('washer_rates',        'name'),
       ('foam_rates',          'type, thickness_mm'),
-      ('reverse_board_rates', 'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('reverse_board_rates', 'size_label, thickness_mm'),
       ('consumable_rates',    'name'),
       ('labour_rates',        'name'),
       ('ribbon_tag_rates',    'size_label'),
@@ -599,7 +624,7 @@ declare
 begin
   for rec in
     select * from (values
-      ('board_rates',         'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('board_rates',         'size_label, thickness_mm'),
       ('paper_rates',         'size_label, gsm'),
       ('white_paper_rates',   'size_label, gsm'),
       ('art_card_rates',      'type, size_label, gsm'),
@@ -610,7 +635,7 @@ begin
       ('magnet_rates',        'diameter_mm, thickness_mm'),
       ('washer_rates',        'name'),
       ('foam_rates',          'type, thickness_mm'),
-      ('reverse_board_rates', 'thickness_mm, sheet_width_in, sheet_height_in'),
+      ('reverse_board_rates', 'size_label, thickness_mm'),
       ('consumable_rates',    'name'),
       ('labour_rates',        'name'),
       ('ribbon_tag_rates',    'size_label'),

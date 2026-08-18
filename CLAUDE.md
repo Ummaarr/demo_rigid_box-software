@@ -166,11 +166,23 @@ multi-tenant system — no org/tenant table, just row ownership.
   original targets.
 
 ## Units
-All dimensions are in INCHES. This is the storage contract, not a display
-choice: `_in` is in every type field, in 11 database column names, and on the
-customer-facing PDFs. `lib/units.ts` converts at the input boundary only
-(mm/cm entry), and stock SHEET sizes always stay in inches because they mirror
-the rate card's inch-labelled sizes.
+All dimensions are STORED in INCHES. This is the storage contract, not a
+display choice: `_in` is in every type field, in 11 database column names, and
+on the customer-facing PDFs. `lib/units.ts` converts at the boundaries only.
+
+STOCK SHEETS ARE THE ONE PLACE THE UNIT IS REMEMBERED (v9). Every sheet-bearing
+rate table carries `size_unit` ('in' | 'cm' | 'mm'), defaulting to 'in'. It
+changes DISPLAY only — the `_in` columns are still what the engines nest on, and
+scripts/validate-sheet-sizes.ts pins that a 70x100 cm sheet produces the same
+sheet count as the identical inches. Two consequences worth knowing:
+
+- `size_label` numbers are written in the row's OWN unit, so a metric row reads
+  "70x100" against 27.559 x 39.370 in. Never compare a label to a sheet without
+  the unit — use `labelAgreesWithSheet` (lib/units.ts), which both the server
+  guard and the rate-card warning icon now share.
+- Do NOT put the unit inside `size_label`. Three parsers expect a bare WxH pair
+  and every one of them fails OPEN on "70x100 cm", silently disabling the
+  mismatch guard, the paper-fits-print filter and the live nesting preview.
 
 Internal conversions (e.g. to sqm for GSM calculations) happen inside functions
 only, never exposed to the user.
@@ -342,13 +354,16 @@ Wiring these to the code that currently hardcodes them is a known TODO; until
 then, changing them on the rate card changes nothing, which is a trap.
 
 ## Validation
-`/scripts` holds offline validators, all runnable without a database:
+`/scripts` holds offline validators, all runnable without a database (the newer
+three — `validate-tape-toggle`, `validate-rate-isolation`, `validate-sheet-sizes`
+— also need `--conditions=react-server`):
 `validate-engines`, `validate-print-paper`, `validate-combination-nesting`,
 `keylines-check`, and `validate-round3`, `-round5` through `-round10`. They assert
 invariants (never-worse nesting, auto == brute force, byte-identity for ungated
 paths, cost reconciliation) rather than golden rupee amounts wherever possible.
 
-Run notes: `validate-round3`, `-round9` and `-round10` import server-only modules
+Run notes: `validate-round3`, `-round9`, `-round10`, `validate-tape-toggle`,
+`validate-rate-isolation` and `validate-sheet-sizes` import server-only modules
 and need `--conditions=react-server`; `validate-round6` renders a PDF and must NOT
 have that condition.
 

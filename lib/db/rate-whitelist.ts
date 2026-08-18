@@ -12,7 +12,16 @@ import { invalidateRateCache } from "@/lib/db/rate-cache";
 // All fields that accept free text (not numbers / booleans).
 export const TEXT_FIELDS = new Set([
   "vendor", "name", "type", "color", "colour", "finish", "size_label", "unit",
+  "size_unit",
 ]);
+
+/**
+ * The unit a stock sheet was ENTERED in. Storage stays inches (see lib/units.ts)
+ * — this only decides how the size is read back, so a metric buyer sees
+ * "70 x 100 cm" rather than "27.56 x 39.37 in". The DB carries the same CHECK;
+ * this is here so a bad value fails with a readable message, not a 23514.
+ */
+export const SIZE_UNITS = new Set(["in", "cm", "mm"]);
 
 // Config tables have `updated_at` but NOT the `vendor`/`updated_by` meta columns
 // that every rate table carries. Stamping `updated_by` on these would fail.
@@ -56,28 +65,28 @@ export const PROPOSABLE_EXCLUDED = new Set(["app_config", "margin_config"]);
 
 // Per-table PATCH allowlist.
 export const ALLOWED: Record<string, { fields: Set<string>; idCol: "id" | "key" }> = {
-  board_rates:            { fields: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "vendor", "is_dummy"]),   idCol: "id" },
-  paper_rates:            { fields: new Set(["size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "is_dummy"]),          idCol: "id" },
-  white_paper_rates:      { fields: new Set(["name", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "is_dummy"]),   idCol: "id" },
-  art_card_rates:         { fields: new Set(["type", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "is_dummy"]),  idCol: "id" },
-  special_paper_rates:    { fields: new Set(["name", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "is_dummy"]),  idCol: "id" },
-  offset_printing_rates:  { fields: new Set(["size_label", "colour", "width_in", "height_in", "first_1000", "additional_1000", "vendor", "is_dummy"]), idCol: "id" },
-  digital_printing_rates: { fields: new Set(["size_label", "width_in", "height_in", "cost_per_sheet", "vendor", "is_dummy"]),                 idCol: "id" },
+  board_rates:            { fields: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "vendor", "size_label", "size_unit", "is_dummy"]),   idCol: "id" },
+  paper_rates:            { fields: new Set(["size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),          idCol: "id" },
+  white_paper_rates:      { fields: new Set(["name", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),   idCol: "id" },
+  art_card_rates:         { fields: new Set(["type", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),  idCol: "id" },
+  special_paper_rates:    { fields: new Set(["name", "size_label", "width_in", "height_in", "gsm", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),  idCol: "id" },
+  offset_printing_rates:  { fields: new Set(["size_label", "colour", "width_in", "height_in", "first_1000", "additional_1000", "vendor", "size_unit", "is_dummy"]), idCol: "id" },
+  digital_printing_rates: { fields: new Set(["size_label", "width_in", "height_in", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),                 idCol: "id" },
   lamination_rates:       { fields: new Set(["type", "rate_per_100sqin", "vendor", "is_dummy"]),                                     idCol: "id" },
   foiling_rates:          { fields: new Set(["color", "finish", "rate_per_sqin", "vendor", "is_dummy"]),                              idCol: "id" },
   uv_coating_rates:       { fields: new Set(["type", "unit", "rate", "vendor", "is_dummy"]),                                         idCol: "id" },
   relief_rates:           { fields: new Set(["type", "rate_per_sqin", "vendor", "is_dummy"]),                                        idCol: "id" },
   magnet_rates:           { fields: new Set(["type", "diameter_mm", "thickness_mm", "price_each", "vendor", "is_dummy"]),             idCol: "id" },
   washer_rates:           { fields: new Set(["name", "price_each", "vendor", "is_dummy"]),                                           idCol: "id" },
-  foam_rates:             { fields: new Set(["type", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "rate_per_mm", "vendor", "is_dummy"]), idCol: "id" },
-  reverse_board_rates:    { fields: new Set(["thickness_mm", "cost_per_sheet", "vendor", "is_dummy"]),                               idCol: "id" },
+  foam_rates:             { fields: new Set(["type", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "rate_per_mm", "vendor", "size_unit", "is_dummy"]), idCol: "id" },
+  reverse_board_rates:    { fields: new Set(["thickness_mm", "cost_per_sheet", "vendor", "size_label", "sheet_width_in", "sheet_height_in", "size_unit", "is_dummy"]),                               idCol: "id" },
   consumable_rates:       { fields: new Set(["name", "unit", "rate", "vendor", "is_dummy"]),                                         idCol: "id" },
   labour_rates:           { fields: new Set(["name", "rate_per_month", "rate_per_day", "rate_per_hour", "vendor", "is_dummy"]),       idCol: "id" },
   ribbon_tag_rates:       { fields: new Set(["size_label", "price_each", "vendor", "is_dummy"]),                                     idCol: "id" },
   handle_rates:           { fields: new Set(["type", "price_each", "vendor", "is_dummy"]),                                           idCol: "id" },
   lock_rates:             { fields: new Set(["type", "price_each", "vendor", "is_dummy"]),                                           idCol: "id" },
-  window_rates:           { fields: new Set(["name", "film_width_in", "film_height_in", "cost_per_sheet", "vendor", "is_dummy"]),    idCol: "id" },
-  misc_rates:             { fields: new Set(["name", "unit", "width_in", "height_in", "thickness_mm", "price", "vendor", "is_dummy"]), idCol: "id" },
+  window_rates:           { fields: new Set(["name", "film_width_in", "film_height_in", "cost_per_sheet", "vendor", "size_unit", "is_dummy"]),    idCol: "id" },
+  misc_rates:             { fields: new Set(["name", "unit", "width_in", "height_in", "thickness_mm", "price", "vendor", "size_unit", "is_dummy"]), idCol: "id" },
   app_config:             { fields: new Set(["value"]),                                                                               idCol: "key" },
   // idCol "id" (not "key" — trial-role): a trial user's own margin_config row
   // can share a `key` value with the master row, so `key` alone no longer
@@ -88,30 +97,30 @@ export const ALLOWED: Record<string, { fields: Set<string>; idCol: "id" | "key" 
 // Per-table INSERT allowlist — required + optional allowed fields.
 // is_dummy defaults true server-side; id is auto-generated.
 export const INSERTABLE: Record<string, { required: string[]; optional: string[]; numeric: Set<string> }> = {
-  board_rates:            { required: ["thickness_mm", "cost_per_sheet"],                                      optional: ["sheet_width_in", "sheet_height_in", "vendor"],          numeric: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"]) },
-  paper_rates:            { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["vendor"],                                              numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
-  white_paper_rates:      { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["name", "vendor"],                                      numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
+  board_rates:            { required: ["size_label", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"],                                      optional: ["size_unit", "vendor"],          numeric: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"]) },
+  paper_rates:            { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["size_unit", "vendor"],                                              numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
+  white_paper_rates:      { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["size_unit", "name", "vendor"],                                      numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
   // `type` is optional so a pre-migration-board-type DB (no such column) can
   // still insert rows; the rate card only sends it once the column exists.
-  art_card_rates:         { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["type", "vendor"],                                      numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
-  special_paper_rates:    { required: ["name", "size_label", "width_in", "height_in", "cost_per_sheet"],       optional: ["gsm", "vendor"],                                       numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
-  offset_printing_rates:  { required: ["size_label", "width_in", "height_in", "first_1000", "additional_1000"], optional: ["colour", "vendor"],                                   numeric: new Set(["width_in", "height_in", "first_1000", "additional_1000"]) },
-  digital_printing_rates: { required: ["size_label", "width_in", "height_in", "cost_per_sheet"],               optional: ["vendor"],                                              numeric: new Set(["width_in", "height_in", "cost_per_sheet"]) },
+  art_card_rates:         { required: ["size_label", "width_in", "height_in", "gsm", "cost_per_sheet"],        optional: ["size_unit", "type", "vendor"],                                      numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
+  special_paper_rates:    { required: ["name", "size_label", "width_in", "height_in", "cost_per_sheet"],       optional: ["size_unit", "gsm", "vendor"],                                       numeric: new Set(["width_in", "height_in", "gsm", "cost_per_sheet"]) },
+  offset_printing_rates:  { required: ["size_label", "width_in", "height_in", "first_1000", "additional_1000"], optional: ["size_unit", "colour", "vendor"],                                   numeric: new Set(["width_in", "height_in", "first_1000", "additional_1000"]) },
+  digital_printing_rates: { required: ["size_label", "width_in", "height_in", "cost_per_sheet"],               optional: ["size_unit", "vendor"],                                              numeric: new Set(["width_in", "height_in", "cost_per_sheet"]) },
   lamination_rates:       { required: ["type", "rate_per_100sqin"],                                            optional: ["vendor"],                                              numeric: new Set(["rate_per_100sqin"]) },
   foiling_rates:          { required: ["color", "rate_per_sqin"],                                              optional: ["finish", "vendor"],                                    numeric: new Set(["rate_per_sqin"]) },
   uv_coating_rates:       { required: ["type", "unit", "rate"],                                                optional: ["vendor"],                                              numeric: new Set(["rate"]) },
   relief_rates:           { required: ["type", "rate_per_sqin"],                                               optional: ["vendor"],                                              numeric: new Set(["rate_per_sqin"]) },
   magnet_rates:           { required: ["diameter_mm", "thickness_mm", "price_each"],                           optional: ["type", "vendor"],                                      numeric: new Set(["diameter_mm", "thickness_mm", "price_each"]) },
   washer_rates:           { required: ["name", "price_each"],                                                  optional: ["vendor"],                                              numeric: new Set(["price_each"]) },
-  foam_rates:             { required: ["type", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"], optional: ["rate_per_mm", "vendor"],                       numeric: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "rate_per_mm"]) },
-  reverse_board_rates:    { required: ["thickness_mm", "cost_per_sheet"],                                      optional: ["vendor"],                                              numeric: new Set(["thickness_mm", "cost_per_sheet"]) },
+  foam_rates:             { required: ["type", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"], optional: ["size_unit", "rate_per_mm", "vendor"],                       numeric: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet", "rate_per_mm"]) },
+  reverse_board_rates:    { required: ["size_label", "thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"],                                      optional: ["size_unit", "vendor"],                                              numeric: new Set(["thickness_mm", "sheet_width_in", "sheet_height_in", "cost_per_sheet"]) },
   consumable_rates:       { required: ["name", "unit", "rate"],                                                optional: ["vendor"],                                              numeric: new Set(["rate"]) },
   labour_rates:           { required: ["name", "rate_per_month", "rate_per_day", "rate_per_hour"],             optional: ["vendor"],                                              numeric: new Set(["rate_per_month", "rate_per_day", "rate_per_hour"]) },
   ribbon_tag_rates:       { required: ["size_label", "price_each"],                                            optional: ["vendor"],                                              numeric: new Set(["price_each"]) },
   handle_rates:           { required: ["type", "price_each"],                                                  optional: ["vendor"],                                              numeric: new Set(["price_each"]) },
   lock_rates:             { required: ["type", "price_each"],                                                  optional: ["vendor"],                                              numeric: new Set(["price_each"]) },
-  window_rates:           { required: ["name", "film_width_in", "film_height_in", "cost_per_sheet"],           optional: ["vendor"],                                              numeric: new Set(["film_width_in", "film_height_in", "cost_per_sheet"]) },
-  misc_rates:             { required: ["name", "unit", "price"],                                               optional: ["width_in", "height_in", "thickness_mm", "vendor"],     numeric: new Set(["width_in", "height_in", "thickness_mm", "price"]) },
+  window_rates:           { required: ["name", "film_width_in", "film_height_in", "cost_per_sheet"],           optional: ["size_unit", "vendor"],                                              numeric: new Set(["film_width_in", "film_height_in", "cost_per_sheet"]) },
+  misc_rates:             { required: ["name", "unit", "price"],                                               optional: ["size_unit", "width_in", "height_in", "thickness_mm", "vendor"],     numeric: new Set(["width_in", "height_in", "thickness_mm", "price"]) },
 };
 
 /** Validate one (table, field, value) triple. Returns an error string or null. */
@@ -127,6 +136,8 @@ export function validateRateValue(
   } else if (TEXT_FIELDS.has(field)) {
     if (value !== null && typeof value !== "string") return `${field} must be a string or null.`;
     if (typeof value === "string" && value.length > 200) return `${field} must be 200 chars or less.`;
+    if (field === "size_unit" && !SIZE_UNITS.has(String(value)))
+      return "size_unit must be one of in, cm, mm.";
   } else {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
       return "value must be a non-negative number.";
