@@ -37,7 +37,6 @@ export interface RateSectionData {
   textEditCols?: ColDef[];
   /** Key column fields that the admin can edit inline (click-to-edit like editCols). */
   editableKeys?: string[];
-  hasDummy: boolean;
   /** Billing unit shown in the section header (client 4-Jul: "mention unit for all items"). */
   unitLabel?: string;
   /** Add-on sections carry a reference photo per row (image_path column). */
@@ -199,7 +198,7 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "sheet_width_in", "sheet_height_in", "thickness_mm"],
       newRowTemplate: { size_label: "", sheet_width_in: 31, sheet_height_in: 41, thickness_mm: 2, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(boardRes) }),
+      rows: rows(boardRes) }),
 
     // Renamed "Printed Paper" -> "Art Paper" (client 4-Jul); table unchanged.
     withMeta({ id: "paper", label: "Art Paper", category: "Materials", table: "paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
@@ -211,7 +210,7 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(paperRes) }),
+      rows: rows(paperRes) }),
 
     withMeta({ id: "white_paper", label: "White Lining Paper", category: "Materials", table: "white_paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       // name = paper type (client 8-Jul: white paper needs a paper-type column).
@@ -224,7 +223,7 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { name: "White paper", size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(whitePaperRes) }),
+      rows: rows(whitePaperRes) }),
 
     // "Art Card" -> "Board" (client 18-Jul): the section now holds every board
     // stock, distinguished by `type`. Label + column only — the table stays
@@ -244,7 +243,7 @@ export async function loadAllRates(
         ...(hasBoardType ? { type: "Art card" } : {}),
         size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0,
       },
-      hasDummy: true, rows: boardRows }),
+      rows: boardRows }),
 
     withMeta({ id: "special_paper", label: "Special Paper", category: "Materials", table: "special_paper_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
@@ -255,7 +254,7 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "size_label", "width_in", "height_in", "gsm"],
       newRowTemplate: { name: "", size_label: "", width_in: 0, height_in: 0, gsm: 120, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(specialPaperRes) }),
+      rows: rows(specialPaperRes) }),
 
     // Vendor is a KEY column on both printing sections (round 10): the unique
     // key is (size_label, colour, vendor) / (size_label, vendor), so the same
@@ -270,7 +269,7 @@ export async function loadAllRates(
       editCols: [{ field: "first_1000", label: `First 1000 (${sym})` }, { field: "additional_1000", label: `+1000 (${sym})` }],
       editableKeys: ["size_label", "colour", "vendor", "width_in", "height_in"],
       newRowTemplate: { size_label: "", colour: "multi", vendor: "", width_in: 0, height_in: 0, first_1000: 0, additional_1000: 0 },
-      hasDummy: true, rows: rows(offsetRes) }, true),
+      rows: rows(offsetRes) }, true),
 
     withMeta({ id: "digital", label: "Digital Printing", category: "Printing", table: "digital_printing_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
@@ -281,14 +280,14 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "vendor", "width_in", "height_in"],
       newRowTemplate: { size_label: "", vendor: "", width_in: 0, height_in: 0, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(digitalRes) }, true),
+      rows: rows(digitalRes) }, true),
 
     withMeta({ id: "lamination", label: "Lamination", category: "Finishing", table: "lamination_rates", idField: "id", unitLabel: `${sym} per 100 sq in`,
       keyCols: [{ field: "type", label: "Type" }],
       editCols: [{ field: "rate_per_100sqin", label: `${sym} / 100 sq in` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", rate_per_100sqin: 0 },
-      hasDummy: true, rows: rows(laminationRes) }),
+      rows: rows(laminationRes) }),
 
     withMeta({ id: "foiling", label: "Foiling", category: "Finishing", table: "foiling_rates", idField: "id", unitLabel: `${sym} per sq in`,
       // finish (client 4-Jul): matte/glossy per colour — prices identical today.
@@ -296,21 +295,21 @@ export async function loadAllRates(
       editCols: [{ field: "rate_per_sqin", label: `${sym} / sq in` }],
       editableKeys: ["color", "finish"],
       newRowTemplate: { color: "", finish: "glossy", rate_per_sqin: 0 },
-      hasDummy: true, rows: rows(foilingRes) }),
+      rows: rows(foilingRes) }),
 
     withMeta({ id: "uv", label: "UV Coating", category: "Finishing", table: "uv_coating_rates", idField: "id", unitLabel: `${sym} per unit shown`,
       keyCols: [{ field: "type", label: "Type" }, { field: "unit", label: "Unit" }],
       editCols: [{ field: "rate", label: `Rate (${sym})` }],
       editableKeys: ["type", "unit"],
       newRowTemplate: { type: "", unit: "per_100sqin", rate: 0 },
-      hasDummy: true, rows: rows(uvRes) }),
+      rows: rows(uvRes) }),
 
     withMeta({ id: "relief", label: "Relief (Emboss / Deboss)", category: "Finishing", table: "relief_rates", idField: "id", unitLabel: `${sym} per sq in`,
       keyCols: [{ field: "type", label: "Type" }],
       editCols: [{ field: "rate_per_sqin", label: `${sym} / sq in` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", rate_per_sqin: 0 },
-      hasDummy: true, rows: rows(reliefRes) }),
+      rows: rows(reliefRes) }),
 
     withMeta({ id: "magnets", label: "Magnets", category: "Hardware", table: "magnet_rates", idField: "id", unitLabel: `${sym} each`,
       // type column (client 4-Jul: "add a column for magnets that says Type").
@@ -318,14 +317,14 @@ export async function loadAllRates(
       editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type", "diameter_mm", "thickness_mm"],
       newRowTemplate: { type: "round", diameter_mm: 0, thickness_mm: 0, price_each: 0 },
-      hasDummy: true, rows: rows(magnetRes) }),
+      rows: rows(magnetRes) }),
 
     withMeta({ id: "washers", label: "Washers", category: "Hardware", table: "washer_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "name", label: "Size" }],
       editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["name"],
       newRowTemplate: { name: "", price_each: 0 },
-      hasDummy: true, rows: rows(washerRes) }),
+      rows: rows(washerRes) }),
 
     withMeta({ id: "foam", label: "Foam Inserts", category: "Inserts", table: "foam_rates", idField: "id", unitLabel: `${sym} per mm (or ${sym} per sheet fallback)`,
       keyCols: [
@@ -340,7 +339,7 @@ export async function loadAllRates(
       ],
       editableKeys: ["type", "thickness_mm", "sheet_width_in", "sheet_height_in"],
       newRowTemplate: { type: "XLPE", thickness_mm: 10, sheet_width_in: 0, sheet_height_in: 0, rate_per_mm: 0, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(foamRes) }),
+      rows: rows(foamRes) }),
 
     withMeta({ id: "reverse_board", label: "Reverse Board (insert)", category: "Inserts", table: "reverse_board_rates", idField: "id", unitLabel: `${sym} per sheet`,
       keyCols: [
@@ -351,28 +350,28 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["size_label", "sheet_width_in", "sheet_height_in", "thickness_mm"],
       newRowTemplate: { size_label: "", sheet_width_in: 31, sheet_height_in: 41, thickness_mm: 0, cost_per_sheet: 0 },
-      hasDummy: true, rows: rows(reverseBoardRes) }),
+      rows: rows(reverseBoardRes) }),
 
     withMeta({ id: "ribbon_tag", label: "Ribbon Tags", category: "Hardware", table: "ribbon_tag_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "size_label", label: "Size" }],
       editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["size_label"],
       newRowTemplate: { size_label: "", price_each: 0 },
-      hasDummy: true, rows: rows(ribbonTagRes) }),
+      rows: rows(ribbonTagRes) }),
 
     withMeta({ id: "handles", label: "Handles", category: "Hardware", table: "handle_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "type", label: "Type" }],
       editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", price_each: 0 },
-      hasDummy: true, hasImage: true, rows: rows(handleRes) }),
+      hasImage: true, rows: rows(handleRes) }),
 
     withMeta({ id: "locks", label: "Locks", category: "Hardware", table: "lock_rates", idField: "id", unitLabel: `${sym} each`,
       keyCols: [{ field: "type", label: "Type" }],
       editCols: [{ field: "price_each", label: `${sym} / each` }],
       editableKeys: ["type"],
       newRowTemplate: { type: "", price_each: 0 },
-      hasDummy: true, hasImage: true, rows: rows(lockRes) }),
+      hasImage: true, rows: rows(lockRes) }),
 
     withMeta({ id: "windows", label: "Window Film", category: "Inserts", table: "window_rates", idField: "id", unitLabel: `${sym} per film sheet`,
       keyCols: [
@@ -382,7 +381,7 @@ export async function loadAllRates(
       editCols: [{ field: "cost_per_sheet", label: `${sym} / sheet` }],
       editableKeys: ["name", "film_width_in", "film_height_in"],
       newRowTemplate: { name: "", film_width_in: 0, film_height_in: 0, cost_per_sheet: 0 },
-      hasDummy: true, hasImage: true, rows: rows(windowRes) }),
+      hasImage: true, rows: rows(windowRes) }),
 
     // Miscellaneous materials (round 3 — satin, velvet, cloth buckles, …).
     // Omitted entirely on a live DB that hasn't run migration-round3.sql yet.
@@ -396,7 +395,7 @@ export async function loadAllRates(
         editCols: [{ field: "price", label: `Price (${sym})` }],
         editableKeys: ["name", "unit", "width_in", "height_in", "thickness_mm"],
         newRowTemplate: { name: "", unit: "each", width_in: 0, height_in: 0, thickness_mm: 0, price: 0 },
-        hasDummy: true, hasImage: true, rows: rows(miscRes) }),
+        hasImage: true, rows: rows(miscRes) }),
     ]),
 
     withMeta({ id: "consumables", label: "Consumables", category: "Other", table: "consumable_rates", idField: "id", unitLabel: `${sym} per unit shown`,
@@ -404,7 +403,7 @@ export async function loadAllRates(
       editCols: [{ field: "rate", label: `Rate (${sym})` }],
       editableKeys: ["name", "unit"],
       newRowTemplate: { name: "", unit: "", rate: 0 },
-      hasDummy: true, rows: rows(consumableRes) }),
+      rows: rows(consumableRes) }),
 
     withMeta({ id: "labour", label: "Labour Roles", category: "Labour", table: "labour_rates", idField: "id", unitLabel: `${sym} per month / day / hour`,
       keyCols: [{ field: "name", label: "Role" }],
@@ -415,13 +414,13 @@ export async function loadAllRates(
       ],
       editableKeys: ["name"],
       newRowTemplate: { name: "", rate_per_month: 0, rate_per_day: 0, rate_per_hour: 0 },
-      hasDummy: true, rows: rows(labourRes) }),
+      rows: rows(labourRes) }),
 
     // Config tables — no vendor/updated_by columns; not wrapped with withMeta.
     { id: "app_config", label: "App Configuration", category: "Configuration", table: "app_config", idField: "key",
       keyCols: [{ field: "key", label: "Setting" }, { field: "unit", label: "Unit" }, { field: "description", label: "Description" }],
       editCols: [{ field: "value", label: "Value" }],
-      hasDummy: false, rows: rows(appConfigRes) },
+      rows: rows(appConfigRes) },
 
     // idField "id" (not "key" — round trial-role): once a trial user's own
     // margin_config row can share a `key` value with the master row, `key`
@@ -429,7 +428,7 @@ export async function loadAllRates(
     { id: "margin", label: "Margin", category: "Configuration", table: "margin_config", idField: "id",
       keyCols: [{ field: "key", label: "Setting" }, { field: "description", label: "Description" }],
       editCols: [{ field: "value", label: "Value (%)" }],
-      hasDummy: false, rows: rows(marginConfigRes) },
+      rows: rows(marginConfigRes) },
   ];
 
   // app_config drives global costing and stays admin-only for everyone else

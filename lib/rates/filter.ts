@@ -18,8 +18,6 @@ export interface RateFilters {
   query: string;
   /** Section category, or ALL. */
   category: string;
-  /** Dummy / real rate status. */
-  status: "all" | "real" | "dummy";
   /** Vendor name, or ALL. */
   vendor: string;
   /** Inclusive updated-on range, "YYYY-MM-DD" (the native date input format). */
@@ -30,7 +28,6 @@ export interface RateFilters {
 export const EMPTY_FILTERS: RateFilters = {
   query: "",
   category: ALL,
-  status: "all",
   vendor: ALL,
   updatedFrom: "",
   updatedTo: "",
@@ -40,7 +37,6 @@ export const EMPTY_FILTERS: RateFilters = {
 export interface FilterableSection {
   label: string;
   category: string;
-  hasDummy: boolean;
   keyCols: { field: string; type?: string }[];
   editCols: { field: string }[];
   textEditCols?: { field: string }[];
@@ -67,7 +63,6 @@ export function searchableFields(s: FilterableSection): string[] {
 export function hasRowFilters(f: RateFilters): boolean {
   return (
     normalizeQuery(f.query) !== "" ||
-    f.status !== "all" ||
     f.vendor !== ALL ||
     f.updatedFrom !== "" ||
     f.updatedTo !== ""
@@ -78,7 +73,6 @@ export function hasRowFilters(f: RateFilters): boolean {
 export function activeFilterCount(f: RateFilters): number {
   return (
     (f.category !== ALL ? 1 : 0) +
-    (f.status !== "all" ? 1 : 0) +
     (f.vendor !== ALL ? 1 : 0) +
     (f.updatedFrom !== "" ? 1 : 0) +
     (f.updatedTo !== "" ? 1 : 0)
@@ -112,7 +106,6 @@ export function vendorOptions(sections: FilterableSection[]): string[] {
 
 export interface RowContext {
   fields: string[];
-  hasDummy: boolean;
   /**
    * The query hit the SECTION NAME, so every row in it counts as a text match —
    * searching "foam" means "show me the foam section", not "rows saying foam".
@@ -129,14 +122,6 @@ export function rowPasses(
   const q = normalizeQuery(f.query);
   if (q && !ctx.queryHitAll && !rowMatches(row, ctx.fields, q)) return false;
 
-  if (f.status !== "all") {
-    // Config sections carry no dummy/real status, so they cannot satisfy a
-    // status filter — they drop out rather than pretending to be "real".
-    if (!ctx.hasDummy) return false;
-    const isDummy = row.is_dummy === true;
-    if (f.status === "dummy" ? !isDummy : isDummy) return false;
-  }
-
   if (f.vendor !== ALL && String(row.vendor ?? "") !== f.vendor) return false;
 
   if (!inDateRange(localDateKey(row.updated_at), f.updatedFrom, f.updatedTo))
@@ -150,7 +135,6 @@ export function rowContext(s: FilterableSection, f: RateFilters): RowContext {
   const q = normalizeQuery(f.query);
   return {
     fields: searchableFields(s),
-    hasDummy: s.hasDummy,
     queryHitAll: q !== "" && s.label.toLowerCase().includes(q),
   };
 }

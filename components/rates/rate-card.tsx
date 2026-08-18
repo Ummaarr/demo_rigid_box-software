@@ -92,19 +92,6 @@ export function RateCard({
               </NativeSelect>
             </FilterField>
 
-            <FilterField label="Rate Status">
-              <NativeSelect
-                value={filters.status}
-                onChange={(e) =>
-                  patch({ status: e.target.value as RateFilters["status"] })
-                }
-              >
-                <option value="all">All Statuses</option>
-                <option value="real">Real</option>
-                <option value="dummy">Dummy</option>
-              </NativeSelect>
-            </FilterField>
-
             <FilterField label="Vendor">
               <NativeSelect
                 value={filters.vendor}

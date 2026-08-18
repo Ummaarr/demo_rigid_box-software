@@ -9,7 +9,6 @@ import {
   rowPasses,
   type RateFilters,
 } from "@/lib/rates/filter";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -49,7 +48,6 @@ export interface SectionDef {
   textEditCols?: ColDef[];
   /** Key column fields editable inline (click-to-edit). */
   editableKeys?: string[];
-  hasDummy: boolean;
   /** Billing unit shown in the section header (client 4-Jul). */
   unitLabel?: string;
   hasImage?: boolean;
@@ -226,7 +224,7 @@ export function RateSection({
 
   const { textEditCols = [], editableKeys = [] } = initial;
   const editableKeySet = new Set(editableKeys);
-  const { idField, table, hasDummy, hasImage } = initial;
+  const { idField, table, hasImage } = initial;
 
   // Human-readable row description stored on proposals so the approver can
   // read "Foam Inserts — XLPE 20mm" without joining tables.
@@ -303,9 +301,6 @@ export function RateSection({
         setNotice("Change proposed — an admin will review it.");
       } else {
         const res = await patchRate(table, rowId, field, newValue);
-        if (!isText && hasDummy && row?.is_dummy === true) {
-          await patchRate(table, rowId, "is_dummy", false);
-        }
         setRows((prev) =>
           prev.map((r) =>
             r[idField] === rowId
@@ -314,7 +309,6 @@ export function RateSection({
                   [field]: newValue,
                   ...(res.updated_at ? { updated_at: res.updated_at } : {}),
                   ...(res.updated_by != null ? { updated_by: res.updated_by } : {}),
-                  ...(!isText && hasDummy ? { is_dummy: false } : {}),
                 }
               : r,
           ),
@@ -345,20 +339,6 @@ export function RateSection({
         throw new Error(j.error ?? "Delete failed");
       }
       setRows((prev) => prev.filter((x) => x[idField] !== rowId));
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-    setSaving(false);
-  }
-
-  async function toggleDummy(rowId: unknown, current: boolean) {
-    setSaving(true);
-    setErr(null);
-    try {
-      const res = await patchRate(table, rowId, "is_dummy", !current);
-      setRows((prev) => prev.map((r) => r[idField] === rowId
-        ? { ...r, is_dummy: !current, ...(res.updated_at ? { updated_at: res.updated_at } : {}) }
-        : r));
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -524,14 +504,12 @@ export function RateSection({
                 {textEditCols.map((c) => (
                   <th key={c.field} className="whitespace-nowrap pb-2 pr-4 font-normal">{c.label}</th>
                 ))}
-                {hasDummy && <th className="pb-2 text-right font-normal">Status</th>}
                 {canManageRows && <th className="w-8 pb-2" />}
               </tr>
             </thead>
             <tbody>
               {visibleRows.map((row, i) => {
                 const rowId = row[idField];
-                const isDummy = row.is_dummy as boolean | undefined;
                 const mismatch = sizeMismatch(row);
                 return (
                   <tr key={String(rowId ?? i)} className="border-b border-dashed last:border-0">
@@ -609,21 +587,6 @@ export function RateSection({
                         {renderEditableCell(rowId, c.field, row[c.field], true, "w-32")}
                       </td>
                     ))}
-                    {hasDummy && (
-                      <td className="py-2 text-right">
-                        {canEditDirectly ? (
-                          <button type="button" disabled={saving} onClick={() => void toggleDummy(rowId, isDummy ?? false)} title="Toggle dummy / real">
-                            <Badge variant="outline" className={isDummy ? "cursor-pointer border-amber-300 text-amber-700" : "cursor-pointer border-green-300 text-green-700"}>
-                              {isDummy ? "Dummy" : "Real"}
-                            </Badge>
-                          </button>
-                        ) : (
-                          <Badge variant="outline" className={isDummy ? "border-amber-300 text-amber-700" : "border-green-300 text-green-700"}>
-                            {isDummy ? "Dummy" : "Real"}
-                          </Badge>
-                        )}
-                      </td>
-                    )}
                     {/* Delete (admin or staff, rate tables only — client 7-Jul
                         + final doc). Old estimates keep their own
                         rates_snapshot, so this is safe. */}
@@ -712,7 +675,6 @@ export function RateSection({
                       </td>
                     ) : <td key={c.field} className="py-2 pr-4" />
                   ))}
-                  {hasDummy && <td className="py-2 text-right text-xs text-muted-foreground">Dummy</td>}
                   <td colSpan={99} className="py-2 pl-2">
                     <div className="flex items-center gap-2">
                       <Button type="button" size="sm" disabled={saving} onClick={() => void commitAddRow()}>Save</Button>
