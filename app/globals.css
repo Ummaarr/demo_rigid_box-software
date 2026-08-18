@@ -27,6 +27,9 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-danger: var(--danger);
+  --color-danger-solid: var(--danger-solid);
+  --color-danger-foreground: var(--danger-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-accent-foreground: var(--accent-foreground);
@@ -90,6 +93,17 @@
   --accent: #eeedea; /* warm neutral hover surfaces */
   --accent-foreground: #171717;
   --destructive: #e40014;
+  /* Danger — the CONFIRMATION tone, deliberately not --destructive.
+     --destructive is a bright alarm red, correct for an error that interrupts
+     you. A confirm dialog is the opposite situation: nothing has gone wrong,
+     you are being asked to commit to something. This is a deep ledger crimson
+     — "red ink", the bookkeeping mark for a strike-out, which is what deleting
+     a costed record actually is. Deep enough to sit beside the brand navy
+     instead of fighting it, and distinct enough that the two reds never read
+     as the same signal. Used by the confirm dialog only. */
+  --danger: #8c1d2f;
+  --danger-solid: #8c1d2f;
+  --danger-foreground: #ffffff;
   /* Success — the counterpart to --destructive. Before this existed, every
      confirmation message picked its own green (emerald-700 / green-700 /
      primary), which is why they never looked like one system. */
@@ -180,6 +194,21 @@
   --check-ease-rotate: cubic-bezier(0.22, 1, 0.36, 1);
   --check-ease-bob: cubic-bezier(0.34, 1.35, 0.64, 1);
   --check-ease-path: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Modal open / close (transitions-dev) — the confirm dialog that replaced
+     window.confirm(). Skill defaults, untouched. */
+  --modal-open-dur: 250ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.96;
+  --modal-scale-close: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Text states swap (transitions-dev) — a control whose label changes in
+     place ("Save estimate" -> "Saving…" -> "Saved"). */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
 }
 
 .dark {
@@ -205,6 +234,12 @@
   --accent: #232320;
   --accent-foreground: #fcfcfc;
   --destructive: #ff6568;
+  /* Dark mode splits the two danger roles: #8c1d2f is unreadable as a mark on
+     a near-black surface, so the icon lifts to a rose while the solid button
+     stays deep enough to carry white text (7.25:1). */
+  --danger: #e8909d;
+  --danger-solid: #a52338;
+  --danger-foreground: #ffffff;
   --success: #34d399;
   --success-foreground: #052e21;
   --border: #ffffff1c;
@@ -400,6 +435,54 @@
   }
 }
 
+/* Modal open / close (transitions-dev) — the confirm dialog.
+   The skill's snippet keys off .is-open / .is-closing and a setTimeout to
+   strip the closing class. Base UI drives the SAME three states declaratively
+   and keeps the popup mounted until the transition ends, so the class hooks
+   are its data attributes instead: [data-starting-style] = the pre-open frame,
+   no attribute = resting/open, [data-ending-style] = closing. No JS cleanup to
+   forget, and the next open can't inherit the closing scale. */
+.t-modal {
+  transform-origin: center;
+  transform: scale(1);
+  opacity: 1;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.t-modal[data-starting-style] {
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+}
+.t-modal[data-ending-style] {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+/* Backdrop fades only — scaling it too reads as the page itself moving. */
+.t-modal-backdrop {
+  opacity: 1;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.t-modal-backdrop[data-starting-style],
+.t-modal-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.t-modal-backdrop[data-ending-style] {
+  transition-duration: var(--modal-close-dur);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-modal,
+  .t-modal-backdrop {
+    transition: none !important;
+  }
+}
+
 /* Error state shake (transitions-dev). Only the shake + message-reveal half
    of the snippet is wired: the auto-revert timer is omitted on purpose, since
    the message is React-owned and clears on the next submit rather than on a
@@ -461,5 +544,52 @@
   .t-input {
     animation: none !important;
     transform: none !important;
+  }
+}
+
+/* Text states swap (transitions-dev) — old label exits up with blur, new one
+   enters from below.
+   The skill's snippet mutates textContent through a three-phase JS sequence
+   (exit -> swap text -> reflow -> enter). React owns this DOM, so the states
+   are STACKED in one grid cell instead and only [data-pos] moves: pure CSS
+   transitions, which means a swap interrupted mid-flight (save clicked again
+   while "Saved" is still settling) reverses from where it is rather than
+   snapping. Direction is preserved by ordering the states — anything before
+   the active one sits above, anything after sits below. */
+.t-text-swap {
+  display: inline-grid;
+  place-items: center;
+}
+.t-text-swap > * {
+  grid-area: 1 / 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter var(--text-swap-dur) var(--text-swap-ease),
+    opacity var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap > [data-pos="active"] {
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+}
+.t-text-swap > [data-pos="above"],
+.t-text-swap > [data-pos="below"] {
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  /* Inactive labels are still laid out (they hold the cell's width) but must
+     never take a click or a screen reader's attention. */
+  pointer-events: none;
+}
+.t-text-swap > [data-pos="above"] {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+}
+.t-text-swap > [data-pos="below"] {
+  transform: translateY(var(--text-swap-translate-y));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap > * {
+    transition: none !important;
   }
 }

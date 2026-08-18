@@ -21,6 +21,7 @@
 import { getSession, ownerScopeFor } from "@/lib/auth";
 import { currencyCodeFor } from "@/lib/currency-meta";
 import { createAdminClient } from "@/lib/db/admin";
+import { invalidateRateCache } from "@/lib/db/rate-cache";
 import {
   ALLOWED,
   INSERTABLE,
@@ -155,6 +156,8 @@ export async function POST(request: Request) {
     console.error(`POST /api/rates (${table}):`, error);
     return Response.json({ error: "Failed to insert row." }, { status: 500 });
   }
+  // The new row must be selectable on the very next estimate form load.
+  invalidateRateCache();
   return Response.json({ ok: true, row: data }, { status: 201 });
 }
 
@@ -197,5 +200,6 @@ export async function DELETE(request: Request) {
     console.error(`DELETE /api/rates (${table}):`, error);
     return Response.json({ error: "Failed to delete row." }, { status: 500 });
   }
+  invalidateRateCache();
   return Response.json({ ok: true });
 }

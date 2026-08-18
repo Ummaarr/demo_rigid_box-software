@@ -8,6 +8,7 @@ import { verifySession, ownerScopeFor } from "@/lib/auth";
 import { createAdminClient } from "@/lib/db/admin";
 import { loadEstimateDetail } from "@/lib/db/estimates";
 import { loadClientsList } from "@/lib/db/clients-db";
+import { loadRateOptions } from "@/lib/db/rate-options";
 import { EstimateForm } from "@/components/estimate/estimate-form";
 import { PageHeader } from "@/components/page-header";
 import type { EstimateRequest } from "@/types";
@@ -22,9 +23,25 @@ export default async function EstimatePage({
 
   const admin = createAdminClient();
   const scope = ownerScopeFor(session);
-  const [detail, clients] = await Promise.all([
+  const [detail, clients, options] = await Promise.all([
     from ? loadEstimateDetail(admin, from, scope) : Promise.resolve(null),
     loadClientsList(admin, scope),
+    // Rate options used to be fetched from the browser after hydration, which
+    // put the whole rate card behind: HTML -> download JS -> hydrate a 3,300-line
+    // form -> re-authenticate -> query. Loading it here removes that waterfall,
+    // and it costs nothing extra: it runs in parallel with the two reads above
+    // and is served from the in-process rate cache.
+    // On failure the form still falls back to fetching it itself, so a rate-card
+    // problem degrades the dropdowns instead of 500-ing the page.
+    //
+    // SCOPED: this is the fourth owner-aware rate-read call site the root
+    // CLAUDE.md warns about. Prefetching it unscoped would offer the MASTER
+    // card's sizes in the form while costing resolved a trial's own clone —
+    // the exact silent half-application that note describes.
+    loadRateOptions(admin, scope).catch((err) => {
+      console.error("estimate page: rate options load failed:", err);
+      return null;
+    }),
   ]);
   const initialSpecs: EstimateRequest | undefined = detail?.specs_snapshot;
 
@@ -37,6 +54,7 @@ export default async function EstimatePage({
 
       <EstimateForm
         role={session.role}
+        initialOptions={options}
         initialSpecs={initialSpecs}
         // Saving a re-run marks the source estimate 'revised' (client 8-Jul).
         sourceEstimateId={detail ? from : undefined}

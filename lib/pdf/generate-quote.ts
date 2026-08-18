@@ -19,13 +19,19 @@ import {
   type QuotationData,
 } from "@/lib/pdf/quotation-data";
 
+// The logo is a build asset — read and base64-encode it ONCE per process
+// instead of on every quote PDF.
+let logoCache: string | undefined | null = null;
+
 async function loadLogo(): Promise<string | undefined> {
+  if (logoCache !== null) return logoCache;
   try {
     const buf = await readFile(join(process.cwd(), "public", "brand", "logo.png"));
-    return `data:image/png;base64,${buf.toString("base64")}`;
+    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
   } catch {
-    return undefined; // component falls back to the company name as text
+    logoCache = undefined; // component falls back to the company name as text
   }
+  return logoCache;
 }
 
 /** Render a quotation PDF from its (possibly stored) data snapshot. */

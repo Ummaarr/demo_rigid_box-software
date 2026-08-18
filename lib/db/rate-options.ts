@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { DEFAULT_BOARD_TYPE } from "@/types";
+import { cachedDerived } from "@/lib/db/rate-cache";
 
 // The distinct rate "options" the estimate form needs to populate its dropdowns
 // (which paper sizes/GSMs, printing sizes, finishing types, foam/magnet/labour
@@ -66,12 +67,31 @@ export interface RateOptions {
   misc: { id: number; name: string; unit: string; price: number }[];
 }
 
+/**
+ * Cached wrapper. These 23 reads run on every estimate-form load and the answer
+ * only changes when someone edits the rate card — which invalidates the cache.
+ * The whole computation is memoised (rather than the individual queries) so the
+ * pre-migration probes below keep depending on real PostgREST errors.
+ */
 export async function loadRateOptions(
   supabase: SupabaseClient,
   // null = the shared master card (admin/staff — unchanged behaviour); a
   // trial user's id = ONLY their own private clone. Always derive from the
   // session via ownerScopeFor() in lib/auth.ts, never a client value.
   ownerId: string | null = null,
+): Promise<RateOptions> {
+  // KEYED PER OWNER. The memo is process-wide, so a bare "rate-options" key
+  // would hand one trial's dropdown options to the next caller — a different
+  // trial, or admin. The master card and each trial clone are genuinely
+  // different answers, so they are genuinely different cache entries.
+  return cachedDerived(`rate-options:${ownerId ?? "master"}`, () =>
+    computeRateOptions(supabase, ownerId),
+  );
+}
+
+async function computeRateOptions(
+  supabase: SupabaseClient,
+  ownerId: string | null,
 ): Promise<RateOptions> {
   // Every rate table below carries owner_id (trial-role isolation — see
   // supabase/migration-trial-role.sql). Generic in the builder type so each

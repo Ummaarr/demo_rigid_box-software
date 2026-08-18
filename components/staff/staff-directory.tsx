@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -68,6 +69,7 @@ export function StaffDirectory({
   currentUserId: string;
 }) {
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<EditState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -126,14 +128,19 @@ export function StaffDirectory({
 
   async function deleteUser(u: StaffUser) {
     const label = u.fullName ?? u.email ?? "this user";
-    // A trial account's clients/estimates/quotes and private rate card are
-    // deleted WITH it (server-side) — say so, since it's not reversible.
-    const message =
-      u.role === "trial"
-        ? `Delete ${label}'s trial account? Their clients, estimates, quotes and private rate card are all deleted too. This cannot be undone.`
-        : `Delete ${label}'s login? They will no longer be able to sign in. Their saved estimates stay.`;
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(message)) return;
+    // Upstream's in-app dialog, carrying the trial-specific warning: a trial
+    // account's clients/estimates/quotes and private rate card are deleted WITH
+    // it (server-side, DELETE /api/staff/[id]), which is not reversible and has
+    // to be said out loud. Staff/admin rows are real company history and stay.
+    const isTrial = u.role === "trial";
+    const ok = await confirm({
+      title: isTrial ? "Delete this trial account?" : "Delete this login?",
+      subject: label,
+      body: isTrial
+        ? "Their clients, estimates, quotes and private rate card are all deleted too. This cannot be undone."
+        : "They will no longer be able to sign in. Their saved estimates stay.",
+    });
+    if (!ok) return;
     setBusy(true);
     setListError(null);
     try {
@@ -152,6 +159,7 @@ export function StaffDirectory({
 
   return (
     <div className="flex flex-col gap-4">
+      {confirmDialog}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input

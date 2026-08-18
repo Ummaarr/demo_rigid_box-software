@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { boxLabel } from "@/lib/box-types";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { SearchInput } from "@/components/ui/search-input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -106,6 +107,11 @@ export function RecentEstimatesTable({
   const inr = { format: (n: number) => money(n, 0) };
   const inr2 = { format: (n: number) => money(n, 2) };
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
+  // Trial accounts may delete their OWN estimates; the API enforces that scope
+  // independently. Upstream's `isAdmin` is dropped rather than kept alongside:
+  // nothing else referenced it, and two near-identical permission flags in one
+  // component is exactly how the wrong one gets used later.
   const canDelete = role === "admin" || role === "trial";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -123,13 +129,12 @@ export function RecentEstimatesTable({
 
   async function deleteEstimate(e: RecentEstimate) {
     const label = `${boxLabel(e.boxType)} × ${e.quantity.toLocaleString("en-IN")}`;
-    // eslint-disable-next-line no-alert
-    if (
-      !window.confirm(
-        `Delete estimate "${label}"? Quotes already sent keep their own copy and stay intact.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: "Delete estimate?",
+      subject: label,
+      body: "Quotes already sent keep their own copy and stay intact.",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -148,6 +153,7 @@ export function RecentEstimatesTable({
 
   return (
     <Card className="gap-0">
+      {confirmDialog}
       <CardHeader className="flex flex-row items-center justify-between gap-3 border-b">
         <CardTitle className="flex items-center gap-2">
           <ClipboardList className="size-4 text-muted-foreground" />

@@ -16,6 +16,7 @@ import type {
 } from "@/types";
 import { DEFAULT_BOARD_TYPE } from "@/types";
 import { EstimateError } from "@/lib/estimate/errors";
+import { byVendorNullsFirst, hasColumn, matchRows, rateTable } from "@/lib/db/rate-cache";
 
 // Auto-trigger sets (mirror Engine 1 / CLAUDE.md) so we only require the rate
 // rows a given box type actually needs.
@@ -146,12 +147,27 @@ export interface ResolvedRates {
 // --- low-level helpers ----------------------------------------------------
 
 /**
- * Fetch a single matching row (or null) from a rate table, scoped to an
- * owner (trial-role isolation — see supabase/migration-trial-role.sql).
- * `ownerId` NULL = the shared master card (admin/staff, unchanged behaviour);
- * a real user id = that trial user's own private clone. Every rate table
- * this is ever called against has an `owner_id` column — app_config (which
- * doesn't) is read via a separate path in configValue() below, never here.
+ * Fetch a single matching row (or null) from a rate table.
+ *
+ * Served from the in-process rate cache (lib/db/rate-cache.ts) rather than a
+ * per-lookup query: resolving one estimate runs 15-40 of these back to back, and
+ * at ~70 ms per round trip that was the bulk of the 4-5 s "Calculate" wait. The
+ * whole rate card is a few KB, so it is pulled once and filtered here.
+ *
+ * SCOPED BY OWNER (trial-role isolation — see supabase/migration-trial-role.sql).
+ * `ownerId` NULL = the shared master card (admin/staff, unchanged behaviour); a
+ * real user id = that trial user's own private clone. This matters MORE with the
+ * cache than it did with per-lookup queries: the cache holds every owner's rows
+ * in one process-wide table, so the owner filter is the only thing separating
+ * one trial's rates from another's. It is passed as an ordinary `owner_id`
+ * filter for that reason — see the note on matchRows.
+ *
+ * Every rate table this is called against has an `owner_id` column; app_config
+ * (which doesn't) is read via a separate path in configValue() below.
+ *
+ * `cols` is no longer sent to PostgREST (the cache holds whole rows) but is kept
+ * on the signature: at 50-odd call sites it documents what each lookup reads,
+ * and dropping it would churn every one of them for no gain.
  */
 async function row<T>(
   supabase: SupabaseClient,
@@ -160,13 +176,19 @@ async function row<T>(
   filters: Record<string, string | number>,
   ownerId: string | null,
 ): Promise<T | null> {
-  let q = supabase.from(table).select(cols).match(filters);
-  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
-  const { data, error } = await q.maybeSingle();
-  if (error) {
-    throw new Error(`rate lookup failed for ${table}: ${error.message}`);
+  const snapshot = await rateTable(supabase, table);
+  if (snapshot.error) {
+    throw new Error(`rate lookup failed for ${table}: ${snapshot.error.message}`);
   }
-  return (data as T | null) ?? null;
+  const matches = matchRows(snapshot.rows, table, { ...filters, owner_id: ownerId });
+  // .maybeSingle() errors when more than one row comes back; a rate table with
+  // duplicate keys is a data fault we must keep surfacing, not silently pick from.
+  if (matches.length > 1) {
+    throw new Error(
+      `rate lookup failed for ${table}: ${matches.length} rows matched a lookup that must return one`,
+    );
+  }
+  return (matches[0] as T | undefined) ?? null;
 }
 
 type CoverPaperRow = { cost_per_sheet: number; width_in: number; height_in: number };
@@ -199,16 +221,19 @@ async function printRow<T>(
   ownerId: string | null,
   vendor?: string,
 ): Promise<T | null> {
-  let q = supabase.from(table).select(cols).match(filters);
-  q = vendor
-    ? q.eq("vendor", vendor)
-    : q.order("vendor", { ascending: true, nullsFirst: true });
-  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
-  const { data, error } = await q.limit(1).maybeSingle();
-  if (error) {
-    throw new Error(`rate lookup failed for ${table}: ${error.message}`);
+  const snapshot = await rateTable(supabase, table);
+  if (snapshot.error) {
+    throw new Error(`rate lookup failed for ${table}: ${snapshot.error.message}`);
   }
-  return (data as T | null) ?? null;
+  let matches = matchRows(snapshot.rows, table, { ...filters, owner_id: ownerId });
+  if (vendor) {
+    // .eq("vendor", v) — a NULL vendor never equals a named one.
+    matches = matches.filter((r) => r.vendor != null && String(r.vendor) === vendor);
+  } else if (hasColumn(snapshot.rows, "vendor")) {
+    matches = [...matches].sort(byVendorNullsFirst);
+  }
+  // `.limit(1)`, so multiple matches were never an error here — the first wins.
+  return (matches[0] as T | undefined) ?? null;
 }
 
 /** " from \"Vendor\"" for error messages — empty when no vendor was chosen, so
@@ -587,22 +612,25 @@ async function resolveFinishing(
       // colour (glossy first) so legacy snapshots — and DBs that haven't run
       // migration-round3.sql (single row per colour, no finish column) —
       // resolve exactly as before.
-      let foils: { rate_per_sqin: number; finish?: string | null }[];
-      let foilQ = supabase.from("foiling_rates").select("rate_per_sqin, finish").eq("color", f.key);
-      foilQ = ownerId == null ? foilQ.is("owner_id", null) : foilQ.eq("owner_id", ownerId);
-      const foilRes = await foilQ;
-      if (foilRes.error) {
-        // 42703 = undefined column: DB predates migration-round3.sql (no finish yet).
-        if (foilRes.error.code !== "42703")
-          throw new Error(`rate lookup failed for foiling_rates: ${foilRes.error.message}`);
-        let legacyQ = supabase.from("foiling_rates").select("rate_per_sqin").eq("color", f.key);
-        legacyQ = ownerId == null ? legacyQ.is("owner_id", null) : legacyQ.eq("owner_id", ownerId);
-        const legacy = await legacyQ;
-        if (legacy.error) throw new Error(`rate lookup failed for foiling_rates: ${legacy.error.message}`);
-        foils = (legacy.data ?? []) as { rate_per_sqin: number }[];
-      } else {
-        foils = (foilRes.data ?? []) as { rate_per_sqin: number; finish?: string | null }[];
-      }
+      // Cached table, filtered in memory (see rate-cache.ts). A DB predating
+      // migration-round3.sql simply has no `finish` on its rows, so `finish`
+      // reads as undefined and the null-tolerant fallback below picks the single
+      // row per colour exactly as the old legacy branch did.
+      //
+      // owner_id is part of the filter for the same reason as row()/printRow():
+      // the cached table holds every owner's foiling rows together, and this
+      // lookup returns a LIST that the picker below chooses from — unscoped, a
+      // trial could be priced off the master card's foil rate.
+      const foilSnapshot = await rateTable(supabase, "foiling_rates");
+      if (foilSnapshot.error)
+        throw new Error(`rate lookup failed for foiling_rates: ${foilSnapshot.error.message}`);
+      const foils = matchRows(foilSnapshot.rows, "foiling_rates", {
+        color: f.key,
+        owner_id: ownerId,
+      }) as unknown as {
+        rate_per_sqin: number;
+        finish?: string | null;
+      }[];
       const r = need(
         foils.find((x) => f.finish && x.finish === f.finish) ??
           foils.find((x) => x.finish === "glossy" || x.finish == null) ??

@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   Card,
   CardAction,
@@ -96,8 +97,10 @@ export function EstimatesList({
   const money = useMoneyFormatter();
   const inr = (n: number | null) => (n == null ? "—" : money(n));
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
   // Trial accounts can delete their OWN estimates (everything they see here
-  // is theirs); the API enforces that scope independently.
+  // is theirs); the API enforces that scope independently. Upstream's `isAdmin`
+  // is dropped — nothing else referenced it.
   const canDelete = role === "admin" || role === "trial";
   const [filters, setFilters] = useState<EstimateFilters>(EMPTY_FILTERS);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -162,8 +165,12 @@ export function EstimatesList({
 
   async function deleteEstimate(e: EstimateListItem) {
     const label = e.name || `${boxLabel(e.box_type)} × ${e.quantity.toLocaleString()}`;
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete estimate "${label}"? Quotes already sent keep their own copy and stay intact.`)) return;
+    const ok = await confirm({
+      title: "Delete estimate?",
+      subject: label,
+      body: "Quotes already sent keep their own copy and stay intact.",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -182,6 +189,7 @@ export function EstimatesList({
 
   return (
     <div className="flex flex-col gap-3">
+      {confirmDialog}
       {/* Toolbar + panel share one un-gapped group, so a collapsed panel adds
           no stray spacing; the panel's own mt-4 supplies the gap when open. */}
       <div>

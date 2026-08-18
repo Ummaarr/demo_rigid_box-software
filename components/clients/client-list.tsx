@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import {
   Sheet,
@@ -72,6 +73,7 @@ export function ClientList({
   role: UserRole | null;
 }) {
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<ClientRow | null>(null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -91,8 +93,13 @@ export function ClientList({
       .some((v) => v!.toLowerCase().includes(q));
   });
 
-  function deleteClient(id: string, name: string) {
-    if (!confirm(`Delete client "${name}"? This cannot be undone.`)) return;
+  async function deleteClient(id: string, name: string) {
+    const ok = await confirm({
+      title: "Delete client?",
+      subject: name,
+      body: "This cannot be undone. Estimates already saved for them are kept.",
+    });
+    if (!ok) return;
     setError(null);
     startTransition(async () => {
       const res = await fetch(`/api/clients/${id}`, { method: "DELETE" });
@@ -115,6 +122,7 @@ export function ClientList({
 
   return (
     <div className="flex flex-col gap-4">
+      {confirmDialog}
       {error && (
         <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
@@ -195,7 +203,7 @@ export function ClientList({
                       size="icon-sm"
                       className="text-destructive hover:text-destructive"
                       disabled={isPending}
-                      onClick={() => deleteClient(c.id, c.name)}
+                      onClick={() => void deleteClient(c.id, c.name)}
                       title="Delete client"
                     >
                       <Trash2 />
