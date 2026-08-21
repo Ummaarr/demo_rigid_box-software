@@ -14,6 +14,7 @@ export interface SizeOption {
   height_in: number;
   gsms: number[];
 }
+import { scopeToCard } from "@/lib/db/card-scope";
 import { cachedDerived } from "@/lib/db/rate-cache";
 
 // The distinct rate "options" the estimate form needs to populate its dropdowns
@@ -116,14 +117,11 @@ async function computeRateOptions(
   supabase: SupabaseClient,
   ownerId: string | null,
 ): Promise<RateOptions> {
-  // Every rate table below carries owner_id (trial-role isolation — see
-  // supabase/migration-trial-role.sql). Generic in the builder type so each
-  // query keeps its own row typing; the internal cast is only needed because
-  // .is/.eq aren't expressible on a bare type parameter.
-  const own = <T,>(q: T): T =>
-    ownerId == null
-      ? (q as unknown as { is: (c: string, v: null) => T }).is("owner_id", null)
-      : (q as unknown as { eq: (c: string, v: string) => T }).eq("owner_id", ownerId);
+  // Every rate table below carries BOTH scoping columns — owner_id (trial-role
+  // isolation) and currency (per-market master card). scopeToCard applies the
+  // pair; see lib/db/card-scope.ts for why the currency half is not optional.
+  // Without it the FORM offers four markets' sheet sizes as duplicate options.
+  const own = <T,>(q: T): T => scopeToCard(q, ownerId);
 
   const [
     board,

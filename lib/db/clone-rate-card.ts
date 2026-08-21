@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { CURRENCY_AGNOSTIC_TABLES } from "@/lib/db/card-scope";
 import type { CurrencyCode } from "@/types";
 
 // Clone the shared master rate card (every row with owner_id null) into a
@@ -44,13 +45,12 @@ const CLONED_TABLES = [
   "margin_config",
 ] as const;
 
-/**
- * margin_config holds a PERCENTAGE, not a price — 25% is 25% in every market —
- * so it has no `currency` column and its single master row is cloned as-is for
- * every trial regardless of the currency they picked. Filtering it by currency
- * would match nothing and silently leave a trial with no margin row at all.
- */
-const CURRENCY_AGNOSTIC_TABLES: ReadonlySet<string> = new Set(["margin_config"]);
+// margin_config holds a PERCENTAGE, not a price — 25% is 25% in every market —
+// so it has no `currency` column and its single master row is cloned as-is for
+// every trial regardless of the currency they picked. Filtering it by currency
+// would match nothing and silently leave a trial with no margin row at all.
+// The set is shared with the READ paths (lib/db/card-scope.ts) so the two can
+// never disagree about which tables are market-independent.
 
 /**
  * Copy the shared rate rows for `currency` into `ownerId`'s own private set.

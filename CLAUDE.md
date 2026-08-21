@@ -96,11 +96,22 @@ multi-tenant system — no org/tenant table, just row ownership.
   copied at account creation by `cloneRateCardForUser`
   (`lib/db/clone-rate-card.ts`). `app_config` is NOT cloned — global formula
   config, admin-only.
-- **FOUR rate-read call sites must all be owner-aware** or the card silently
+- **FOUR rate-read call sites must all be card-aware** or the card silently
   half-applies: `lib/db/rates.ts` (`row`/`printRow`), `lib/estimate/
   auto-printing.ts`, `lib/db/rate-admin.ts`, `lib/db/rate-options.ts`. Miss the
   last one and the estimate FORM offers the master card's sizes while costing
   resolves the clone's.
+- **A card is identified by TWO columns, `owner_id` AND `currency`** —
+  `lib/db/card-scope.ts` is the one place that pairs them (`scopeToCard` for
+  PostgREST queries, `matchRows` in `lib/db/rate-cache.ts` for the cached
+  in-memory path). Owner alone is enough for a trial, whose clone is one
+  market; it is NOT enough for the SHARED card, which holds four template sets
+  once `seed-currency-templates.sql` has been run. Reading it owner-only
+  matched four rows per key and took every admin/staff estimate down with a
+  500 ("N rows matched a lookup that must return one"), and would have had
+  auto-printing shop for the cheapest plate across markets. `margin_config`
+  and `app_config` are market-independent and carry no `currency` column —
+  `CURRENCY_AGNOSTIC_TABLES`, shared with `cloneRateCardForUser`.
 - **Writes** go through `applyRateUpdate`, which checks row ownership: admin
   may only touch `owner_id is null`, trial only its own. Trial edits DIRECTLY
   (no propose/approve — that gate exists to protect the SHARED card from staff

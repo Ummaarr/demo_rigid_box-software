@@ -15,6 +15,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { getBlanks } from "@/lib/formulas";
 import { innerLiningBlanksFor } from "@/lib/formulas/inner-lining";
+import { scopeToCard } from "@/lib/db/card-scope";
 import { configValue } from "@/lib/db/rates";
 import { EstimateError } from "@/lib/estimate/errors";
 import {
@@ -42,15 +43,18 @@ async function loadPrintCandidates(
   // Round 10: with a vendor chosen, Auto compares only that vendor's sizes.
   // With none, it compares EVERY row — including several vendors' — so the
   // pick genuinely weighs plate cost against paper cost across printers.
-  // Owner-scoped (trial-role isolation) the same way lib/db/rates.ts's
+  // Card-scoped (owner + currency) the same way lib/db/rates.ts's
   // row()/printRow() are: null = shared master card, a user id = that
-  // trial user's own clone.
+  // trial user's own clone. The currency half MATTERS MOST here — this
+  // function's whole job is to pick the CHEAPEST candidate, so an unscoped
+  // shared read would compare rupees against pounds and always "win" with
+  // whichever market happens to have the smallest numbers.
   if (type === "digital") {
     let q = supabase
       .from("digital_printing_rates")
       .select("size_label, cost_per_sheet, width_in, height_in, vendor");
     q = vendor ? q.eq("vendor", vendor) : q;
-    q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
+    q = scopeToCard(q, ownerId);
     const { data, error } = await q;
     if (error) throw new EstimateError(`Could not load digital printing sizes: ${error.message}`);
     return (data ?? []).map((r) => ({
@@ -66,12 +70,12 @@ async function loadPrintCandidates(
   const cols = "size_label, first_1000, additional_1000, width_in, height_in, vendor";
   let q1 = supabase.from("offset_printing_rates").select(cols).eq("colour", colour);
   q1 = vendor ? q1.eq("vendor", vendor) : q1;
-  q1 = ownerId == null ? q1.is("owner_id", null) : q1.eq("owner_id", ownerId);
+  q1 = scopeToCard(q1, ownerId);
   let res = await q1;
   if (res.error) {
     let q2 = supabase.from("offset_printing_rates").select(cols);
     q2 = vendor ? q2.eq("vendor", vendor) : q2;
-    q2 = ownerId == null ? q2.is("owner_id", null) : q2.eq("owner_id", ownerId);
+    q2 = scopeToCard(q2, ownerId);
     res = await q2;
   }
   if (res.error) throw new EstimateError(`Could not load offset printing sizes: ${res.error.message}`);
@@ -93,7 +97,7 @@ async function loadPaperCandidates(
   ownerId: string | null,
 ): Promise<PaperCandidate[]> {
   let q = supabase.from("paper_rates").select("size_label, cost_per_sheet, width_in, height_in").eq("gsm", gsm);
-  q = ownerId == null ? q.is("owner_id", null) : q.eq("owner_id", ownerId);
+  q = scopeToCard(q, ownerId);
   const { data, error } = await q;
   if (error) throw new EstimateError(`Could not load paper sizes: ${error.message}`);
   return (data ?? []).map((r) => ({

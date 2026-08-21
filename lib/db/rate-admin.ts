@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { BRAND } from "@/lib/brand";
+import { scopeToCard } from "@/lib/db/card-scope";
 
 export interface ColDef {
   field: string;
@@ -67,14 +68,13 @@ export async function loadAllRates(
   currencySymbol: string = BRAND.currencySymbol,
 ): Promise<RateSectionData[]> {
   const sym = currencySymbol;
-  // Every rate table (not app_config) carries owner_id (trial-role isolation
-  // — see supabase/migration-trial-role.sql). Generic in the builder type so
-  // each query keeps its own row typing; the internal cast is only needed
-  // because .is/.eq aren't expressible on a bare type parameter.
-  const own = <T,>(q: T): T =>
-    ownerId == null
-      ? (q as unknown as { is: (c: string, v: null) => T }).is("owner_id", null)
-      : (q as unknown as { eq: (c: string, v: string) => T }).eq("owner_id", ownerId);
+  // Every rate table (not app_config) carries owner_id (trial-role isolation),
+  // and every PRICED one also carries currency (per-market master card).
+  // scopeToCard applies both — see lib/db/card-scope.ts. Without the currency
+  // half this page lists the master card's four template sets stacked on top of
+  // each other, four rows deep, and an edit lands on whichever one sorted first.
+  const own = <T,>(q: T, opts?: { currencyAgnostic?: boolean }): T =>
+    scopeToCard(q, ownerId, opts);
 
   const [
     boardRes,
@@ -145,7 +145,9 @@ export async function loadAllRates(
     own(supabase.from("window_rates").select("*").order("name")),
     // app_config: global formula config, no owner_id column — unfiltered.
     supabase.from("app_config").select("*").order("key"),
-    own(supabase.from("margin_config").select("*").order("key")),
+    // margin_config: a percentage is market-independent, so it has no currency
+    // column (CURRENCY_AGNOSTIC_TABLES in lib/db/card-scope.ts).
+    own(supabase.from("margin_config").select("*").order("key"), { currencyAgnostic: true }),
     // Round 3 — tolerate a pre-migration DB (missing table => section omitted).
     own(supabase.from("misc_rates").select("*").order("name")),
   ]);

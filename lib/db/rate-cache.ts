@@ -2,6 +2,8 @@ import "server-only";
 
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
+import { CURRENCY_AGNOSTIC_TABLES, DEPLOYMENT_CURRENCY } from "@/lib/db/card-scope";
+
 /**
  * In-process cache for the rate card.
  *
@@ -201,6 +203,15 @@ function valueEquals(rowValue: unknown, filterValue: string | number | null): bo
  * result, it lets one trial be priced off another's rates. That is why the
  * scoping lives here as an ordinary filter rather than as an optional argument
  * a call site can forget: a missing `owner_id` key is visible in the diff.
+ *
+ * CURRENCY SCOPING (multi-currency, supabase/migration-multi-currency.sql) is
+ * applied HERE instead, without a filter key, because unlike owner_id it never
+ * varies by call site — see lib/db/card-scope.ts. `owner_id: null` means "the
+ * shared master card", which holds one template set PER MARKET, so it is also
+ * implicitly "and the deployment's own currency". A trial's clone needs no such
+ * narrowing (it is already one market), and a table with no `currency` column
+ * — margin_config, and any DB predating the migration — is left alone, so both
+ * keep their pre-multi-currency behaviour exactly.
  */
 export function matchRows(
   rows: RateRow[],
@@ -214,8 +225,14 @@ export function matchRows(
       );
     }
   }
+  const scoped =
+    filters.owner_id === null &&
+    !CURRENCY_AGNOSTIC_TABLES.has(table) &&
+    hasColumn(rows, "currency")
+      ? { ...filters, currency: DEPLOYMENT_CURRENCY }
+      : filters;
   return rows.filter((r) =>
-    Object.entries(filters).every(([col, want]) => valueEquals(r[col], want)),
+    Object.entries(scoped).every(([col, want]) => valueEquals(r[col], want)),
   );
 }
 

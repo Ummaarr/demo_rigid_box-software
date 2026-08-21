@@ -167,6 +167,11 @@ export interface ResolvedRates {
  * Every rate table this is called against has an `owner_id` column; app_config
  * (which doesn't) is read via a separate path in configValue() below.
  *
+ * A shared read (`ownerId` null) is ALSO narrowed to the deployment's own
+ * currency, inside matchRows — the master card holds one template set per
+ * market, so without it every lookup here matches four rows and throws below.
+ * See lib/db/card-scope.ts.
+ *
  * `cols` is no longer sent to PostgREST (the cache holds whole rows) but is kept
  * on the signature: at 50-odd call sites it documents what each lookup reads,
  * and dropping it would churn every one of them for no gain.

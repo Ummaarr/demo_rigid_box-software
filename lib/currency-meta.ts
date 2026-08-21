@@ -44,6 +44,18 @@ export const CURRENCY_META: Record<CurrencyCode, CurrencyMeta> = {
 /** Picker order — India first, then the three export markets. */
 export const CURRENCY_CODES: CurrencyCode[] = ["INR", "USD", "GBP", "AED"];
 
+/**
+ * The market the DEPLOYMENT itself trades in.
+ *
+ * The shared master card is four template sets, one per currency, so that a
+ * trial can be cloned into any market (see supabase/seed-currency-templates.sql).
+ * Only ONE of them is the deployment's own card — the rows admin and staff
+ * price against, and the rows BRAND re-skins as dollars. Every read of the
+ * shared card must therefore be narrowed to this currency; without it a lookup
+ * that "must return one" matches four (see lib/db/card-scope.ts).
+ */
+export const DEPLOYMENT_CURRENCY: CurrencyCode = "INR";
+
 export function isCurrencyCode(v: unknown): v is CurrencyCode {
   return typeof v === "string" && v in CURRENCY_META;
 }
@@ -73,5 +85,5 @@ export function currencyMetaFor(
 export function currencyCodeFor(
   session: { role: string | null; trialCurrency: CurrencyCode | null },
 ): CurrencyCode {
-  return currencyMetaFor(session)?.code ?? "INR";
+  return currencyMetaFor(session)?.code ?? DEPLOYMENT_CURRENCY;
 }

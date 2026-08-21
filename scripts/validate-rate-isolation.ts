@@ -9,8 +9,17 @@
 // somebody else's numbers. Trial accounts are competing manufacturers evaluating
 // on one deployment, so that is the failure this file exists to catch.
 //
+// The SHARED card needs a second filter for the same reason (lib/db/card-scope.ts):
+// it holds one template set per market, so an owner-only read of it returns four
+// rows per key. That one does not fail silently in row() — it throws "N rows
+// matched a lookup that must return one", which is what took every admin estimate
+// down with a 500 the first time seed-currency-templates.sql was run — but it DOES
+// fail silently in auto-printing, which picks the cheapest candidate and would
+// cross markets to find it.
+//
 // These are pure in-memory checks against matchRows/cachedDerived — no database.
 
+import { DEPLOYMENT_CURRENCY } from "@/lib/db/card-scope";
 import { cachedDerived, matchRows, type RateRow } from "@/lib/db/rate-cache";
 
 let failures = 0;
@@ -83,6 +92,63 @@ check(
   "owner_id null matches an explicitly undefined column value",
   matchRows([{ owner_id: undefined, x: 1 }], "t", { owner_id: null }).length,
   1,
+);
+
+console.log("\n== currency scoping of the SHARED card ==");
+// The master card after seed-currency-templates.sql: the same natural key, four
+// times over, every row owner_id null. Plus one trial clone, which carries a
+// currency of its own (whatever market that lead picked).
+const multi: RateRow[] = [
+  { id: 1, name: "tape", rate: 0.63, currency: "INR", owner_id: null, note: "master INR" },
+  { id: 2, name: "tape", rate: 0.2, currency: "USD", owner_id: null, note: "master USD" },
+  { id: 3, name: "tape", rate: 0.15, currency: "GBP", owner_id: null, note: "master GBP" },
+  { id: 4, name: "tape", rate: 0.4, currency: "AED", owner_id: null, note: "master AED" },
+  { id: 5, name: "tape", rate: 0.4, currency: "AED", owner_id: A, note: "trial A (AED)" },
+];
+
+check(
+  "a shared read returns ONE row, not one per market",
+  notes(matchRows(multi, "consumable_rates", { name: "tape", owner_id: null })),
+  [`master ${DEPLOYMENT_CURRENCY}`],
+);
+check(
+  "...and it is the deployment's own market, not the cheapest one",
+  matchRows(multi, "consumable_rates", { name: "tape", owner_id: null })[0].rate,
+  0.63,
+);
+check(
+  "a trial reads its own clone whatever market it is in",
+  notes(matchRows(multi, "consumable_rates", { name: "tape", owner_id: A })),
+  ["trial A (AED)"],
+);
+check(
+  "an explicit currency filter still narrows the shared card",
+  notes(matchRows(multi, "consumable_rates", { name: "tape", owner_id: null, currency: "INR" })),
+  ["master INR"],
+);
+check(
+  "a currency-less table (margin_config) is left alone",
+  matchRows(
+    [{ key: "default_margin_pct", value: 25, owner_id: null }],
+    "margin_config",
+    { key: "default_margin_pct", owner_id: null },
+  ).length,
+  1,
+);
+check(
+  "a DB predating multi-currency is left alone (no currency column)",
+  notes(matchRows(rows, "foiling_rates", { color: "gold", owner_id: null })),
+  ["master"],
+);
+
+console.log("\n== the second regression this file guards ==");
+// Without the currency narrowing, row() throws and auto-printing cross-shops.
+const unnarrowed = multi.filter((r) => r.owner_id == null && r.name === "tape");
+check("an owner-only shared read sees all four template sets", unnarrowed.length, 4);
+check(
+  "...so 'cheapest' would be a GBP rate on a rupee card",
+  Math.min(...unnarrowed.map((r) => Number(r.rate))),
+  0.15,
 );
 
 console.log("\n== pre-migration parity ==");
