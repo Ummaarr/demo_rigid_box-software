@@ -514,6 +514,38 @@ export function FinishingRows({
   );
 }
 
+/**
+ * Warn when labour dwarfs every material on the job.
+ *
+ * Labour is the one Level-1 line the engine cannot sanity-check for itself: it
+ * is a flat `rate × duration` total (lib/engines/cost.ts), NOT multiplied by
+ * the box count, so a duration typed as if it were a piece count sails through
+ * every validator and simply lands in the price. A real case: "Grooving, per
+ * day, 5000" — meant as boxes, charged as 5000 worker-days — put 96% of Level 1
+ * into labour and quoted a rigid box at 26x its true cost.
+ *
+ * Deliberately a NOTE, not a block. Heavily handmade work legitimately runs
+ * labour-dominant, so this only fires past 2x the material subtotal, which no
+ * plausible rigid-box job reaches, and it never stops anyone saving.
+ */
+function LabourSanityNote({ cost }: { cost: ResultCost }) {
+  const money = useMoneyFormatter();
+  const labour = cost.labour ?? 0;
+  const materials = cost.materialSubtotal ?? 0;
+  if (labour <= 0 || materials <= 0 || labour <= materials * 2) return null;
+  const share = Math.round((labour / (labour + materials)) * 100);
+
+  return (
+    <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      <strong>Labour is {share}% of this estimate.</strong> {money(labour)} of labour against{" "}
+      {money(materials)} of materials. Labour is charged as a flat total for the whole job — the
+      number beside each role is a DURATION (worker-days or hours), not a count of boxes or
+      pieces, and it is not multiplied by the order quantity. Check those figures if that
+      wasn&apos;t intended.
+    </div>
+  );
+}
+
 export function ResultPanel({
   materials,
   cost,
@@ -546,6 +578,8 @@ export function ResultPanel({
 
   return (
     <div className="flex flex-col gap-6">
+      <LabourSanityNote cost={cost} />
+
       {/* Auto-economical printing (round 5): show what the server picked. */}
       {(autoPicks ?? []).length > 0 && (
         <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">

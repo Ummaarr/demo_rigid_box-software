@@ -3247,7 +3247,17 @@ export function EstimateForm({
         </FormSection>
 
         {/* 4 — Labour */}
-        <FormSection def={SECTIONS[3]} description="One line per role. Cost = rate × hours or days.">
+        {/* The number is a DURATION, not a count. It used to be headed "Qty",
+            which reads as pieces everywhere else in this form (ordered
+            quantity, magnets, handles), and sits right beside "per day" — so
+            "per day × 5000" was entered meaning 5000 boxes and charged as
+            5000 worker-days. Labour is a flat job total (rate × this number,
+            not multiplied by the box count), so nothing downstream catches
+            the mistake. Say what the number is, in the label. */}
+        <FormSection
+          def={SECTIONS[3]}
+          description="One line per role. Enter how long the whole job takes — worker-days or hours, not the number of boxes."
+        >
           <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Labour lines</span>
@@ -3260,7 +3270,7 @@ export function EstimateForm({
                 <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 text-xs text-muted-foreground">
                   <span>Role</span>
                   <span className="w-24">Unit</span>
-                  <span className="w-20">Qty</span>
+                  <span className="w-20">Days / hrs</span>
                   <span className="w-7" />
                 </div>
               )}
@@ -3273,7 +3283,7 @@ export function EstimateForm({
                     <option value="hour">per hour</option>
                     <option value="day">per day</option>
                   </NativeSelect>
-                  <NumberField aria-label="Quantity" className="w-20" step="1" min="0" value={line.quantity} emptyValue={0} onValueChange={(n) => updateLabour(i, { quantity: n })} />
+                  <NumberField aria-label={line.unit === "hour" ? "Hours" : "Days"} className="w-20" step="1" min="0" value={line.quantity} emptyValue={0} onValueChange={(n) => updateLabour(i, { quantity: n })} />
                   <Button type="button" variant="ghost" size="icon-sm" aria-label="Remove labour line" onClick={() => removeLabour(i)}>
                     <X />
                   </Button>

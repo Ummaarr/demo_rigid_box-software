@@ -221,6 +221,29 @@ export function buildCostView(
   ] as const) {
     const groups = materials ? wrapGroupsOf(materials, layer) : [];
     const sel = layer === "outer" ? specs.wrapping?.outer : specs.wrapping?.inner;
+    /**
+     * The wrap a GROUP is actually made of — the per-component override when
+     * this component has one, else the shared layer wrap.
+     *
+     * A group is by definition "the components sharing an identical wrap
+     * config" (wrapGroupsOf in lib/engines/material.ts), so the first
+     * component's wrap describes the whole group. `components` is empty on the
+     * pre-round-7 single-group fallback, which is the shared wrap by
+     * definition.
+     *
+     * Reading `sel` here instead — as this did — mislabels every overridden
+     * group: the engine charges the override's stock (a 120 GSM component
+     * costed at its own rate) while the row reads off the shared wrap's GSM.
+     * The money was always right; only the words were wrong. Mirrors
+     * outerSelFor/innerSelFor in lib/pdf/materials-data.ts, which already
+     * resolved this correctly for the floor sheet.
+     */
+    const selOf = (g: { components: string[] }): OuterWrap | InnerWrap | undefined => {
+      const over = g.components.length
+        ? specs.wrapping?.perComponent?.[g.components[0]]
+        : undefined;
+      return (layer === "outer" ? over?.outer : over?.inner) ?? sel;
+    };
     const paperTotal = layer === "outer" ? cost.outerPaper : cost.innerPaper;
     const printTotal = layer === "outer" ? cost.printing : (cost.innerPrinting ?? 0);
     // Round-10 tier itemisation; absent on pre-round-10 stored breakdowns, which
@@ -256,7 +279,7 @@ export function buildCostView(
             `${title} paper${tag}`,
             paperTotal * share,
             [
-              stockLabel(sel),
+              stockLabel(selOf(g)),
               dims(g.material.sheet),
               sheetDetail(g.material),
               bought != null ? `→ buy ${sheets(bought)}` : null,
@@ -272,7 +295,7 @@ export function buildCostView(
             row(
               `${title} printing${tag}`,
               printTotal * pShare,
-              [printLabel(sel), sheets(g.material.totalSheets)].filter(Boolean).join(" · "),
+              [printLabel(selOf(g)), sheets(g.material.totalSheets)].filter(Boolean).join(" · "),
             ),
           );
         }
@@ -291,10 +314,15 @@ export function buildCostView(
     // and move the editable line to the SECTION, since no single tier row maps
     // 1:1 to the whitelisted `printing` line. The foamDetail precedent.
     if (printDetail?.length) {
+      // The tiers are per-LAYER, so they only describe one wrap when the layer
+      // has one group. With several groups the run spans different wraps and no
+      // single label is true of all of them — the shared selection stays the
+      // honest fallback there.
+      const tierSel = groups.length === 1 ? selOf(groups[0]) : sel;
       push(
         `${title} printing`,
         printDetail.map((d) =>
-          row(d.label, d.amount, [printLabel(sel), sheets(d.sheets)].filter(Boolean).join(" · ")),
+          row(d.label, d.amount, [printLabel(tierSel), sheets(d.sheets)].filter(Boolean).join(" · ")),
         ),
         printLine,
       );
